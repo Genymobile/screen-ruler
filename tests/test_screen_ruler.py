@@ -89,15 +89,19 @@ class TestTraceRay:
 
     # -- diagonal / combined directions (sanity) -----------------------------
 
-    def test_stationary_ray_returns_zero(self):
-        """dx=dy=0 would loop forever; direction (0,0) is not a valid input
-        but the function should not be called that way.  Instead we verify
-        that a boundary is still reached for valid directions."""
+    def test_non_stationary_cardinal_rays_return_non_negative_distance(self):
+        """Verify valid non-stationary cardinal directions reach a boundary
+        and produce a non-negative distance."""
         em = self._empty(5, 5)
-        # Just pick cardinal directions and confirm non-negative results
         for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
             result = trace_ray(em, 2, 2, dx, dy)
             assert result >= 0
+
+    def test_stationary_direction_raises_value_error(self):
+        """Direction (0, 0) is invalid and must raise instead of hanging."""
+        em = self._empty(5, 5)
+        with pytest.raises(ValueError, match="non-zero direction"):
+            trace_ray(em, 2, 2, 0, 0)
 
     # -- measurement correctness ---------------------------------------------
 
@@ -160,7 +164,7 @@ class TestComputeEdgeMap:
 
     def test_hard_edge_is_detected(self):
         """
-        A half-black / half-white image has a crisp horizontal edge.
+        A half-black / half-white image has a crisp vertical edge.
         The edge map must contain some True pixels along that boundary.
         """
         from PyQt6.QtGui import QImage, QColor

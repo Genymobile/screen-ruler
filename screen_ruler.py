@@ -91,6 +91,9 @@ def trace_ray(
     int
         Ray length in edge-map pixels (≥ 0).
     """
+    if dx == 0 and dy == 0:
+        raise ValueError("trace_ray requires a non-zero direction vector.")
+
     map_h, map_w = edge_map.shape
     cx, cy = px, py
     dist = 0
@@ -584,12 +587,12 @@ class RulerBackend(QObject):
 
         self._cx = lx
         self._cy = ly
-        self._d_n = int(d_n / self._dpr_y)
-        self._d_s = int(d_s / self._dpr_y)
-        self._d_w = int(d_w / self._dpr_x)
-        self._d_e = int(d_e / self._dpr_x)
-        self._W = self._d_w + self._d_e
-        self._H = self._d_n + self._d_s
+        self._d_n = int(round(d_n / self._dpr_y))
+        self._d_s = int(round(d_s / self._dpr_y))
+        self._d_w = int(round(d_w / self._dpr_x))
+        self._d_e = int(round(d_e / self._dpr_x))
+        self._W = int(round((d_w + d_e) / self._dpr_x))
+        self._H = int(round((d_n + d_s) / self._dpr_y))
 
         self.dataChanged.emit()
 
