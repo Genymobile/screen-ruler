@@ -21,6 +21,8 @@ Controls
 import sys
 import os
 import argparse
+import shutil
+import subprocess
 
 import numpy as np
 
@@ -35,7 +37,16 @@ except ImportError:
     sys.exit(1)
 
 from PyQt6.QtGui import QGuiApplication, QCursor, QImage
-from PyQt6.QtCore import Qt, QTimer, QRect, QUrl, QObject, pyqtSignal, pyqtProperty
+from PyQt6.QtCore import (
+    Qt,
+    QTimer,
+    QRect,
+    QUrl,
+    QObject,
+    QEventLoop,
+    pyqtSignal,
+    pyqtProperty,
+)
 from PyQt6.QtQml import QQmlApplicationEngine
 
 # ---------------------------------------------------------------------------
@@ -170,15 +181,146 @@ def capture_screen(app: QGuiApplication) -> QImage:
     for screen in screens:
         all_rect = all_rect.united(screen.geometry())
 
+    if all_rect.width() <= 0 or all_rect.height() <= 0:
+        return QImage()
+
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
+
+    if session_type == "wayland":
+        image = _capture_screen_qt_native(app)
+        if not image.isNull() and image.width() > 0 and image.height() > 0:
+            return image
+
     primary = app.primaryScreen()
-    pixmap = primary.grabWindow(
-        0,
-        all_rect.x(),
-        all_rect.y(),
-        all_rect.width(),
-        all_rect.height(),
-    )
-    return pixmap.toImage()
+    if primary is not None:
+        pixmap = primary.grabWindow(
+            0,
+            all_rect.x(),
+            all_rect.y(),
+            all_rect.width(),
+            all_rect.height(),
+        )
+        image = pixmap.toImage()
+        if not image.isNull() and image.width() > 0 and image.height() > 0:
+            return image
+
+    return _capture_screen_external(all_rect)
+
+
+def _capture_screen_qt_native(
+    app: QGuiApplication,
+    timeout_ms: int = 12000,
+) -> QImage:
+    """Try Qt Multimedia native screen capture (portal-based on Wayland)."""
+    try:
+        from PyQt6.QtMultimedia import QScreenCapture, QMediaCaptureSession, QVideoSink
+    except Exception:
+        return QImage()
+
+    screen = app.primaryScreen()
+    if screen is None:
+        return QImage()
+
+    capture = QScreenCapture()
+    session = QMediaCaptureSession()
+    sink = QVideoSink()
+
+    session.setScreenCapture(capture)
+    session.setVideoOutput(sink)
+    capture.setScreen(screen)
+
+    result: dict[str, QImage] = {"image": QImage()}
+    loop = QEventLoop()
+    timer = QTimer()
+    timer.setSingleShot(True)
+
+    def finish() -> None:
+        if loop.isRunning():
+            loop.quit()
+
+    def on_frame(frame) -> None:
+        if not frame.isValid():
+            return
+        image = frame.toImage()
+        if image.isNull() or image.width() <= 0 or image.height() <= 0:
+            return
+        result["image"] = image
+        finish()
+
+    sink.videoFrameChanged.connect(on_frame)
+    capture.errorOccurred.connect(lambda *_: finish())
+    timer.timeout.connect(finish)
+
+    timer.start(timeout_ms)
+    capture.start()
+    loop.exec()
+    capture.stop()
+
+    return result["image"]
+
+
+def _qt_native_capture_supported() -> bool:
+    try:
+        from PyQt6.QtMultimedia import QScreenCapture, QMediaCaptureSession, QVideoSink
+    except Exception:
+        return False
+    return all((QScreenCapture, QMediaCaptureSession, QVideoSink))
+
+
+def _capture_screen_external(all_rect: QRect) -> QImage:
+    """Try an external screenshot tool based on the active Linux session type."""
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
+    command = None
+
+    if session_type == "wayland":
+        grim = shutil.which("grim")
+        if grim:
+            geometry = (
+                f"{all_rect.x()},{all_rect.y()} "
+                f"{all_rect.width()}x{all_rect.height()}"
+            )
+            command = [grim, "-g", geometry, "-t", "png", "-"]
+    elif session_type == "x11":
+        imagemagick_import = shutil.which("import")
+        if imagemagick_import:
+            command = [imagemagick_import, "-window", "root", "png:-"]
+
+    if not command:
+        return QImage()
+
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return QImage()
+
+    if not result.stdout:
+        return QImage()
+
+    image = QImage.fromData(result.stdout, "PNG")
+    if image.isNull() or image.width() <= 0 or image.height() <= 0:
+        return QImage()
+    return image
+
+
+def _capture_tool_hint() -> str | None:
+    """Return a user-facing hint about optional external screenshot tools."""
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
+    if session_type == "wayland":
+        if _qt_native_capture_supported():
+            return (
+                "Tip: when prompted, allow desktop screen-capture authorization "
+                "for this app."
+            )
+        if not shutil.which("grim"):
+            return "Tip: install 'grim' to enable Wayland fallback screenshot capture."
+    if session_type == "x11" and not shutil.which("import"):
+        return "Tip: install ImageMagick ('import') to enable X11 fallback screenshot capture."
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +334,9 @@ def _try_set_click_through_x11(window) -> None:
     setting an empty ``ShapeInput`` region via the XFixes extension.
     Silently ignored on non-X11 platforms or if the libraries are absent.
     """
+    if os.environ.get("XDG_SESSION_TYPE", "").strip().lower() != "x11":
+        return
+
     try:
         import ctypes
         import ctypes.util
@@ -429,6 +574,9 @@ def main() -> None:
             "environment.",
             file=sys.stderr,
         )
+        hint = _capture_tool_hint()
+        if hint:
+            print(hint, file=sys.stderr)
         sys.exit(1)
     print(
         f"Edge map: {edge_map.shape[1]}×{edge_map.shape[0]} px  |  "

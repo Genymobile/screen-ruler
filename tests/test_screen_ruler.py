@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 # Import only the pure-logic symbols; avoid triggering any Qt initialisation.
-from screen_ruler import trace_ray, compute_edge_map
+from screen_ruler import trace_ray, compute_edge_map, _capture_screen_external
 
 
 # ---------------------------------------------------------------------------
@@ -195,3 +195,72 @@ class TestComputeEdgeMap:
 
         with pytest.raises(ValueError, match="empty screenshot"):
             compute_edge_map(QImage())
+
+
+class TestExternalCaptureFallback:
+    """Tests for Wayland/X11-specific external screenshot fallbacks."""
+
+    def _png_bytes(self) -> bytes:
+        from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
+        from PyQt6.QtGui import QImage
+
+        image = QImage(4, 3, QImage.Format.Format_RGB32)
+        image.fill(0xFF112233)
+
+        byte_array = QByteArray()
+        buffer = QBuffer(byte_array)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        return bytes(byte_array)
+
+    def test_wayland_uses_grim_when_available(self, monkeypatch):
+        import screen_ruler
+        from PyQt6.QtCore import QRect
+
+        calls = []
+
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        monkeypatch.setattr(
+            "screen_ruler.shutil.which",
+            lambda name: "/usr/bin/grim" if name == "grim" else None,
+        )
+
+        png = self._png_bytes()
+
+        class Result:
+            stdout = png
+
+        def fake_run(command, check, capture_output, timeout):
+            calls.append(command)
+            return Result()
+
+        monkeypatch.setattr("screen_ruler.subprocess.run", fake_run)
+
+        image = _capture_screen_external(QRect(10, 20, 100, 60))
+        assert not image.isNull()
+        assert calls
+        assert calls[0][0] == "/usr/bin/grim"
+
+    def test_x11_returns_empty_without_import_tool(self, monkeypatch):
+        from PyQt6.QtCore import QRect
+
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.setattr("screen_ruler.shutil.which", lambda _: None)
+
+        image = _capture_screen_external(QRect(0, 0, 50, 50))
+        assert image.isNull()
+
+    def test_external_failure_returns_empty_image(self, monkeypatch):
+        import screen_ruler
+        from PyQt6.QtCore import QRect
+
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        monkeypatch.setattr("screen_ruler.shutil.which", lambda name: "/usr/bin/grim")
+
+        def fake_run(command, check, capture_output, timeout):
+            raise screen_ruler.subprocess.CalledProcessError(1, command)
+
+        monkeypatch.setattr("screen_ruler.subprocess.run", fake_run)
+
+        image = _capture_screen_external(QRect(0, 0, 50, 50))
+        assert image.isNull()
