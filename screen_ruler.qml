@@ -17,6 +17,23 @@ Window {
     property var backend: (typeof ruler !== "undefined" ? ruler : null)
     property bool hasBackend: backend !== null
 
+    readonly property color crosshairColor: "#00DCFF"
+    readonly property int crosshairLineWidth: 1
+    readonly property int crosshairTickHalfLength: 5
+
+    readonly property int labelOffsetX: 14
+    readonly property int labelOffsetY: 4
+    readonly property int labelShadowOffset: 2
+    readonly property int labelRadius: 5
+    readonly property int labelHorizontalPadding: 18
+    readonly property int labelVerticalPadding: 12
+    readonly property real labelOpacity: 0.8
+    readonly property color labelBackgroundColor: Qt.rgba(0.16, 0.17, 0.19, 1.0)
+    readonly property color labelShadowColor: Qt.rgba(0, 0, 0, 0.22)
+    readonly property color labelTextColor: "#D7DADF"
+
+    readonly property real debugOverlayOpacity: 0.3
+
     // Position and size are driven by the virtual desktop bounds that Python
     // computed from the union of all screen geometries.
     x:      hasBackend && backend.isWaylandSession ? 0 : (hasBackend ? backend.virtualDesktopX : 0)
@@ -69,7 +86,7 @@ Window {
         source: hasBackend ? backend.debugOverlaySource : ""
         fillMode: Image.Stretch
         smooth: false
-        opacity: 0.3
+        opacity: debugOverlayOpacity
         z: -1
     }
 
@@ -93,8 +110,8 @@ Window {
             if (!hasBackend || backend.cursorX < 0) return
 
             // Cyan crosshair
-            ctx.strokeStyle = "#00DCFF"
-            ctx.lineWidth   = 1
+            ctx.strokeStyle = crosshairColor
+            ctx.lineWidth   = crosshairLineWidth
             ctx.beginPath()
             // Vertical ray: north tip → cursor → south tip
             ctx.moveTo(backend.cursorX, backend.northEnd)
@@ -105,7 +122,7 @@ Window {
 
             // Perpendicular end-caps — small tick marks at each ray tip
             // that highlight the measured boundary
-            var t = 5  // half-length of each tick → 10 px total
+            var t = crosshairTickHalfLength  // half-length of each tick → 10 px total
             // North tip (horizontal tick)
             ctx.moveTo(backend.cursorX - t, backend.northEnd)
             ctx.lineTo(backend.cursorX + t, backend.northEnd)
@@ -127,36 +144,42 @@ Window {
     // Measurement label — semi-transparent box, positioned near cursor
     // -----------------------------------------------------------------------
     Rectangle {
+        id: labelShadow
+
+        x:       labelBox.x + labelShadowOffset
+        y:       labelBox.y + labelShadowOffset
+        width:   labelBox.width
+        height:  labelBox.height
+        color:   labelShadowColor
+        radius:  labelRadius
+        visible: labelBox.visible
+        z:       1
+    }
+
+    Rectangle {
         id: labelBox
 
-        x:       (hasBackend ? backend.cursorX : -14) + 14
-        y:       (hasBackend ? backend.cursorY : -4) + 4
-        width:   labelColumn.width  + 12
-        height:  labelColumn.height + 12
-        color:   Qt.rgba(0, 0, 0, 0.63)
-        radius:  3
+        x:       (hasBackend ? backend.cursorX : -labelOffsetX) + labelOffsetX
+        y:       (hasBackend ? backend.cursorY : -labelOffsetY) + labelOffsetY
+        width:   sizeText.implicitWidth + labelHorizontalPadding
+        height:  sizeText.implicitHeight + labelVerticalPadding
+        color:   labelBackgroundColor
+        opacity: labelOpacity
+        radius:  labelRadius
         visible: hasBackend && backend.cursorX >= 0
+        z:       2
 
-        Column {
-            id: labelColumn
+        Text {
+            id: sizeText
             anchors.centerIn: parent
-            spacing: 2
-
-            Text {
-                text:             "W: " + (hasBackend ? backend.widthPx : 0)  + " px"
-                color:            "#FFFF3C"
-                font.family:      "DejaVu Sans Mono, Consolas, monospace"
-                font.pointSize:   13
-                font.bold:        true
-            }
-
-            Text {
-                text:             "H: " + (hasBackend ? backend.heightPx : 0) + " px"
-                color:            "#FFFF3C"
-                font.family:      "DejaVu Sans Mono, Consolas, monospace"
-                font.pointSize:   13
-                font.bold:        true
-            }
+            text:             (hasBackend ? backend.widthPx : 0)
+                             + " × "
+                             + (hasBackend ? backend.heightPx : 0)
+                             + " px"
+            color:            labelTextColor
+            font.family:      "DejaVu Sans Mono, Consolas, monospace"
+            font.pointSize:   13
+            font.bold:        true
         }
     }
 }
