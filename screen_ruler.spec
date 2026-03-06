@@ -12,10 +12,13 @@ a = Analysis(
     ['screen_ruler.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    # Bundle the QML file so it is available inside the one-file binary.
+    datas=[('screen_ruler.qml', '.')],
     # cv2 is imported inside a try/except; declare it explicitly so
     # PyInstaller's static analyser does not miss it.
-    hiddenimports=['cv2'],
+    # QtQml and QtQuick are used at runtime by QQmlApplicationEngine but
+    # are not imported at the top level of screen_ruler.py.
+    hiddenimports=['cv2', 'PyQt6.QtQml', 'PyQt6.QtQuick'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

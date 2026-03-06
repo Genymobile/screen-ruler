@@ -19,6 +19,7 @@ Controls
 """
 
 import sys
+import os
 import argparse
 
 import numpy as np
@@ -33,29 +34,14 @@ except ImportError:
     )
     sys.exit(1)
 
-from PyQt5.QtWidgets import QApplication, QWidget
-from PyQt5.QtCore import Qt, QTimer, QRect
-from PyQt5.QtGui import (
-    QPainter,
-    QColor,
-    QPen,
-    QFont,
-    QCursor,
-    QImage,
-)
+from PyQt6.QtGui import QGuiApplication, QCursor, QImage
+from PyQt6.QtCore import Qt, QTimer, QRect, QObject, pyqtSignal, pyqtProperty
+from PyQt6.QtQml import QQmlApplicationEngine
 
 # ---------------------------------------------------------------------------
-# Visual constants
+# Timing constant
 # ---------------------------------------------------------------------------
 
-LINE_COLOR = QColor(0, 220, 255)        # cyan crosshair lines
-LABEL_FG_COLOR = QColor(255, 255, 60)   # yellow text
-LABEL_BG_COLOR = QColor(0, 0, 0, 160)  # semi-transparent black backdrop
-LABEL_OFFSET_X = 14                     # pixels right of the cursor
-LABEL_OFFSET_Y = 4                      # pixels below the cursor
-FONT_NAME = "DejaVu Sans Mono"
-FONT_SIZE = 13
-CROSSHAIR_WIDTH = 1
 TIMER_INTERVAL_MS = 16                  # ≈ 60 FPS
 
 # ---------------------------------------------------------------------------
@@ -141,7 +127,7 @@ def compute_edge_map(
     -------
     np.ndarray of dtype bool, shape ``(H, W)``
     """
-    qimage = qimage.convertToFormat(QImage.Format_RGB888)
+    qimage = qimage.convertToFormat(QImage.Format.Format_RGB888)
     width = qimage.width()
     height = qimage.height()
     # Qt may add per-row padding; bytesPerLine() is the actual stride.
@@ -160,7 +146,7 @@ def compute_edge_map(
     return edges.astype(bool)
 
 
-def capture_screen(app: QApplication) -> QImage:
+def capture_screen(app: QGuiApplication) -> QImage:
     """
     Grab a screenshot covering all connected monitors and return it as a
     ``QImage`` at the display's physical (device-pixel) resolution.
@@ -186,7 +172,7 @@ def capture_screen(app: QApplication) -> QImage:
 # ---------------------------------------------------------------------------
 
 
-def _try_set_click_through_x11(window: QWidget) -> None:
+def _try_set_click_through_x11(window) -> None:
     """
     Attempt to make *window* fully click-through on X11/Linux by
     setting an empty ``ShapeInput`` region via the XFixes extension.
@@ -230,149 +216,128 @@ def _try_set_click_through_x11(window: QWidget) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Overlay widget
+# QML backend: exposes ruler data as Qt properties for QML bindings
 # ---------------------------------------------------------------------------
 
 
-class ScreenRulerOverlay(QWidget):
+class RulerBackend(QObject):
     """
-    Full-screen transparent overlay that renders the edge-detection crosshair
-    and measurement labels in real time.
+    QObject that exposes cursor position and measurement data to QML.
+
+    All properties notify via a single ``dataChanged`` signal so that
+    QML ``Connections`` handlers and property bindings are re-evaluated
+    on every cursor move.
     """
 
-    def __init__(self, edge_map: np.ndarray, device_pixel_ratio: float) -> None:
+    dataChanged = pyqtSignal()
+
+    def __init__(
+        self,
+        edge_map: np.ndarray,
+        dpr: float,
+        virtual_x: int,
+        virtual_y: int,
+        virtual_w: int,
+        virtual_h: int,
+    ) -> None:
         super().__init__()
-        self._edge_map = edge_map           # shape (H, W), dtype bool
-        self._dpr = device_pixel_ratio
-        self._cursor_x: int = -1
-        self._cursor_y: int = -1
-        self._init_window()
-        self._init_timer()
-        _try_set_click_through_x11(self)
+        self._edge_map = edge_map
+        self._dpr = dpr
+        self._vx = virtual_x
+        self._vy = virtual_y
+        self._vw = virtual_w
+        self._vh = virtual_h
+        self._cx: int = -1
+        self._cy: int = -1
+        self._d_n: int = 0
+        self._d_s: int = 0
+        self._d_w: int = 0
+        self._d_e: int = 0
+        self._W: int = 0
+        self._H: int = 0
 
     # ------------------------------------------------------------------
-    # Initialisation
+    # Properties read by QML
     # ------------------------------------------------------------------
 
-    def _init_window(self) -> None:
-        self.setWindowTitle("Screen Ruler")
-        self.setWindowFlags(
-            Qt.WindowStaysOnTopHint
-            | Qt.FramelessWindowHint
-            | Qt.Tool
-            | Qt.X11BypassWindowManagerHint
-        )
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    @pyqtProperty(int, notify=dataChanged)
+    def cursorX(self) -> int:
+        return self._cx
 
-        # Span all monitors
-        rect = QRect()
-        for screen in QApplication.screens():
-            rect = rect.united(screen.geometry())
-        self.setGeometry(rect)
+    @pyqtProperty(int, notify=dataChanged)
+    def cursorY(self) -> int:
+        return self._cy
 
-    def _init_timer(self) -> None:
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._poll_cursor)
-        self._timer.start(TIMER_INTERVAL_MS)
+    @pyqtProperty(int, notify=dataChanged)
+    def northEnd(self) -> int:
+        return self._cy - self._d_n if self._cy >= 0 else 0
+
+    @pyqtProperty(int, notify=dataChanged)
+    def southEnd(self) -> int:
+        return self._cy + self._d_s if self._cy >= 0 else 0
+
+    @pyqtProperty(int, notify=dataChanged)
+    def westEnd(self) -> int:
+        return self._cx - self._d_w if self._cx >= 0 else 0
+
+    @pyqtProperty(int, notify=dataChanged)
+    def eastEnd(self) -> int:
+        return self._cx + self._d_e if self._cx >= 0 else 0
+
+    @pyqtProperty(int, notify=dataChanged)
+    def widthPx(self) -> int:
+        return self._W
+
+    @pyqtProperty(int, notify=dataChanged)
+    def heightPx(self) -> int:
+        return self._H
+
+    @pyqtProperty(int, notify=dataChanged)
+    def virtualDesktopX(self) -> int:
+        return self._vx
+
+    @pyqtProperty(int, notify=dataChanged)
+    def virtualDesktopY(self) -> int:
+        return self._vy
+
+    @pyqtProperty(int, notify=dataChanged)
+    def virtualDesktopWidth(self) -> int:
+        return self._vw
+
+    @pyqtProperty(int, notify=dataChanged)
+    def virtualDesktopHeight(self) -> int:
+        return self._vh
 
     # ------------------------------------------------------------------
-    # Cursor polling
+    # Cursor polling (called by QTimer at ~60 Hz)
     # ------------------------------------------------------------------
 
-    def _poll_cursor(self) -> None:
+    def poll(self) -> None:
+        """Re-trace rays from the current cursor position and emit dataChanged."""
         pos = QCursor.pos()
-        if pos.x() != self._cursor_x or pos.y() != self._cursor_y:
-            self._cursor_x = pos.x()
-            self._cursor_y = pos.y()
-            self.update()
-
-    # ------------------------------------------------------------------
-    # Key handling
-    # ------------------------------------------------------------------
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        if event.key() in (Qt.Key_Escape, Qt.Key_Q):
-            QApplication.quit()
-
-    # ------------------------------------------------------------------
-    # Painting
-    # ------------------------------------------------------------------
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        if self._cursor_x < 0:
+        lx, ly = pos.x(), pos.y()
+        if lx == self._cx and ly == self._cy:
             return
 
-        lx = self._cursor_x   # logical cursor x
-        ly = self._cursor_y   # logical cursor y
-
-        # Map logical cursor position → edge-map (physical) coordinates
         map_h, map_w = self._edge_map.shape
         ex = max(0, min(int(lx * self._dpr), map_w - 1))
         ey = max(0, min(int(ly * self._dpr), map_h - 1))
 
-        # Trace the four rays in edge-map pixel space
         d_n = trace_ray(self._edge_map, ex, ey, 0, -1)
         d_s = trace_ray(self._edge_map, ex, ey, 0, 1)
         d_w = trace_ray(self._edge_map, ex, ey, -1, 0)
         d_e = trace_ray(self._edge_map, ex, ey, 1, 0)
 
-        # Convert ray lengths back to logical pixels for drawing
-        draw_y_n = ly - int(d_n / self._dpr)
-        draw_y_s = ly + int(d_s / self._dpr)
-        draw_x_w = lx - int(d_w / self._dpr)
-        draw_x_e = lx + int(d_e / self._dpr)
+        self._cx = lx
+        self._cy = ly
+        self._d_n = int(d_n / self._dpr)
+        self._d_s = int(d_s / self._dpr)
+        self._d_w = int(d_w / self._dpr)
+        self._d_e = int(d_e / self._dpr)
+        self._W = d_w + d_e
+        self._H = d_n + d_s
 
-        # Physical-pixel measurements (what the user cares about)
-        W = d_w + d_e
-        H = d_n + d_s
-
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, False)
-
-        # ---- Crosshair lines ----
-        pen = QPen(LINE_COLOR, CROSSHAIR_WIDTH, Qt.SolidLine)
-        pen.setCosmetic(True)
-        painter.setPen(pen)
-        painter.drawLine(lx, draw_y_n, lx, draw_y_s)   # vertical ray
-        painter.drawLine(draw_x_w, ly, draw_x_e, ly)   # horizontal ray
-
-        # ---- Measurement labels ----
-        font = QFont(FONT_NAME, FONT_SIZE, QFont.Bold)
-        painter.setFont(font)
-
-        label_w = f"W: {W} px"
-        label_h = f"H: {H} px"
-
-        label_x = lx + LABEL_OFFSET_X
-        label_y = ly + LABEL_OFFSET_Y
-
-        fm = painter.fontMetrics()
-        line_height = fm.height()
-        pad = 3
-
-        # Background rectangles (improve readability on any desktop)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(LABEL_BG_COLOR)
-        for row, text in enumerate((label_w, label_h)):
-            text_rect = fm.boundingRect(text)
-            painter.drawRoundedRect(
-                label_x - pad,
-                label_y + row * (line_height + 2) - pad,
-                text_rect.width() + 2 * pad,
-                line_height + 2 * pad,
-                3,
-                3,
-            )
-
-        # Foreground text
-        painter.setPen(QPen(LABEL_FG_COLOR))
-        painter.drawText(label_x, label_y + fm.ascent(), label_w)
-        painter.drawText(
-            label_x, label_y + line_height + 2 + fm.ascent(), label_h
-        )
-
-        painter.end()
+        self.dataChanged.emit()
 
 
 # ---------------------------------------------------------------------------
@@ -404,15 +369,33 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _find_qml() -> str:
+    """Return the absolute path to screen_ruler.qml.
+
+    Works both when running as a plain Python script and inside a
+    PyInstaller one-file bundle (where data files land in ``sys._MEIPASS``).
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base = getattr(sys, "_MEIPASS")
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "screen_ruler.qml")
+
+
 def main() -> None:
     args = parse_args()
 
-    app = QApplication(sys.argv)
+    app = QGuiApplication(sys.argv)
     app.setApplicationName("Screen Ruler")
 
     # HIDPI: query device pixel ratio from the primary screen
     primary_screen = app.primaryScreen()
     dpr = primary_screen.devicePixelRatio()
+
+    # Compute virtual desktop bounds (union of all screen geometries)
+    all_rect = QRect()
+    for screen in app.screens():
+        all_rect = all_rect.united(screen.geometry())
 
     print("Capturing screen…")
     qimage = capture_screen(app)
@@ -429,11 +412,33 @@ def main() -> None:
         f"{edge_map.sum():,} edge pixels found."
     )
 
-    overlay = ScreenRulerOverlay(edge_map, dpr)
-    overlay.show()
-    overlay.activateWindow()
+    ruler = RulerBackend(
+        edge_map,
+        dpr,
+        all_rect.x(),
+        all_rect.y(),
+        all_rect.width(),
+        all_rect.height(),
+    )
 
-    sys.exit(app.exec_())
+    engine = QQmlApplicationEngine()
+    engine.rootContext().setContextProperty("ruler", ruler)
+    engine.load(_find_qml())
+
+    if not engine.rootObjects():
+        print("Error: failed to load QML UI", file=sys.stderr)
+        sys.exit(1)
+
+    # Apply X11 click-through after the QQuickWindow is created
+    root_window = engine.rootObjects()[0]
+    _try_set_click_through_x11(root_window)
+
+    # Start the cursor-polling timer
+    timer = QTimer()
+    timer.timeout.connect(ruler.poll)
+    timer.start(TIMER_INTERVAL_MS)
+
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

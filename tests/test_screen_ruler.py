@@ -131,10 +131,10 @@ class TestComputeEdgeMap:
     """Tests for the Canny-based edge-map builder."""
 
     def _make_qimage(self, width: int, height: int, rgb: tuple) -> "QImage":
-        from PyQt5.QtGui import QImage
-        img = QImage(width, height, QImage.Format_RGB888)
+        from PyQt6.QtGui import QImage
+        img = QImage(width, height, QImage.Format.Format_RGB888)
         img.fill(0)
-        from PyQt5.QtGui import QColor
+        from PyQt6.QtGui import QColor
         color = QColor(*rgb)
         for y in range(height):
             for x in range(width):
@@ -143,7 +143,7 @@ class TestComputeEdgeMap:
 
     def test_solid_colour_produces_no_edges(self):
         """A uniformly coloured image should yield no edges at all."""
-        from PyQt5.QtGui import QImage
+        from PyQt6.QtGui import QImage
         img = self._make_qimage(50, 50, (128, 64, 200))
         edge_map = compute_edge_map(img)
         assert edge_map.dtype == bool
@@ -152,7 +152,7 @@ class TestComputeEdgeMap:
 
     def test_output_shape_matches_input(self):
         """Edge map must have the same spatial dimensions as the source image."""
-        from PyQt5.QtGui import QImage
+        from PyQt6.QtGui import QImage
         img = self._make_qimage(80, 60, (0, 0, 0))
         edge_map = compute_edge_map(img)
         assert edge_map.shape == (60, 80)
@@ -162,9 +162,9 @@ class TestComputeEdgeMap:
         A half-black / half-white image has a crisp horizontal edge.
         The edge map must contain some True pixels along that boundary.
         """
-        from PyQt5.QtGui import QImage, QColor
+        from PyQt6.QtGui import QImage, QColor
         w, h = 100, 100
-        img = QImage(w, h, QImage.Format_RGB888)
+        img = QImage(w, h, QImage.Format.Format_RGB888)
         img.fill(0)
         white = QColor(255, 255, 255)
         for y in range(h):
@@ -176,14 +176,14 @@ class TestComputeEdgeMap:
 
     def test_returns_bool_array(self):
         """Return type must always be a boolean numpy array."""
-        from PyQt5.QtGui import QImage
+        from PyQt6.QtGui import QImage
         img = self._make_qimage(10, 10, (100, 100, 100))
         edge_map = compute_edge_map(img)
         assert edge_map.dtype == bool
 
     def test_custom_thresholds_accepted(self):
         """Function must not raise when non-default thresholds are supplied."""
-        from PyQt5.QtGui import QImage
+        from PyQt6.QtGui import QImage
         img = self._make_qimage(20, 20, (0, 0, 0))
         # Should not raise
         edge_map = compute_edge_map(img, threshold_low=10, threshold_high=200)

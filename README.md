@@ -16,7 +16,7 @@ At launch, screen-ruler captures a one-time screenshot and builds a binary edge 
 
 | Package | Minimum version |
 |---|---|
-| [PyQt5](https://pypi.org/project/PyQt5/) | 5.15 |
+| [PyQt6](https://pypi.org/project/PyQt6/) | 6.2 |
 | [NumPy](https://pypi.org/project/numpy/) | 1.21 |
 | [opencv-python-headless](https://pypi.org/project/opencv-python-headless/) | 4.5 |
 
