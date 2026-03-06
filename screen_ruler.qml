@@ -14,21 +14,25 @@ import QtQuick.Window
 
 Window {
     id: root
+    property var backend: (typeof ruler !== "undefined" ? ruler : null)
+    property bool hasBackend: backend !== null
 
     // Position and size are driven by the virtual desktop bounds that Python
     // computed from the union of all screen geometries.
-    x:      ruler.virtualDesktopX
-    y:      ruler.virtualDesktopY
-    width:  ruler.virtualDesktopWidth
-    height: ruler.virtualDesktopHeight
+    x:      hasBackend && backend.isWaylandSession ? 0 : (hasBackend ? backend.virtualDesktopX : 0)
+    y:      hasBackend && backend.isWaylandSession ? 0 : (hasBackend ? backend.virtualDesktopY : 0)
+    width:  hasBackend && backend.isWaylandSession ? Screen.width : (hasBackend ? backend.virtualDesktopWidth : Screen.width)
+    height: hasBackend && backend.isWaylandSession ? Screen.height : (hasBackend ? backend.virtualDesktopHeight : Screen.height)
 
     // Frameless, always-on-top, transparent overlay
-    flags:  Qt.WindowStaysOnTopHint
-          | Qt.FramelessWindowHint
-          | Qt.Tool
-          | Qt.X11BypassWindowManagerHint
+        flags:  hasBackend && backend.isWaylandSession
+            ? (Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+            : (Qt.WindowStaysOnTopHint
+             | Qt.FramelessWindowHint
+             | Qt.Tool
+             | Qt.X11BypassWindowManagerHint)
     color:   "transparent"
-    visible: true
+        visibility: hasBackend && backend.isWaylandSession ? Window.FullScreen : Window.Windowed
     title:   "Screen Ruler"
 
     // -----------------------------------------------------------------------
@@ -44,6 +48,32 @@ Window {
     }
 
     // -----------------------------------------------------------------------
+    // Captured screenshot background (always shown)
+    // -----------------------------------------------------------------------
+    Image {
+        anchors.fill: parent
+        visible: hasBackend && backend.screenshotAvailable
+        source: hasBackend ? backend.screenshotSource : ""
+        fillMode: Image.Stretch
+        smooth: false
+        opacity: 1.0
+        z: -2
+    }
+
+    // -----------------------------------------------------------------------
+    // Optional debug overlay — displays the captured Canny edge map
+    // -----------------------------------------------------------------------
+    Image {
+        anchors.fill: parent
+        visible: hasBackend && backend.debugOverlayEnabled
+        source: hasBackend ? backend.debugOverlaySource : ""
+        fillMode: Image.Stretch
+        smooth: false
+        opacity: 0.3
+        z: -1
+    }
+
+    // -----------------------------------------------------------------------
     // Crosshair canvas — repainted on every cursor move
     // -----------------------------------------------------------------------
     Canvas {
@@ -52,7 +82,7 @@ Window {
 
         // Re-request a paint pass whenever the ruler backend emits dataChanged
         Connections {
-            target: ruler
+            target: hasBackend ? backend : null
             function onDataChanged() { canvas.requestPaint() }
         }
 
@@ -60,34 +90,34 @@ Window {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-            if (ruler.cursorX < 0) return
+            if (!hasBackend || backend.cursorX < 0) return
 
             // Cyan crosshair
             ctx.strokeStyle = "#00DCFF"
             ctx.lineWidth   = 1
             ctx.beginPath()
             // Vertical ray: north tip → cursor → south tip
-            ctx.moveTo(ruler.cursorX, ruler.northEnd)
-            ctx.lineTo(ruler.cursorX, ruler.southEnd)
+            ctx.moveTo(backend.cursorX, backend.northEnd)
+            ctx.lineTo(backend.cursorX, backend.southEnd)
             // Horizontal ray: west tip → cursor → east tip
-            ctx.moveTo(ruler.westEnd,  ruler.cursorY)
-            ctx.lineTo(ruler.eastEnd,  ruler.cursorY)
+            ctx.moveTo(backend.westEnd,  backend.cursorY)
+            ctx.lineTo(backend.eastEnd,  backend.cursorY)
 
             // Perpendicular end-caps — small tick marks at each ray tip
             // that highlight the measured boundary
             var t = 5  // half-length of each tick → 10 px total
             // North tip (horizontal tick)
-            ctx.moveTo(ruler.cursorX - t, ruler.northEnd)
-            ctx.lineTo(ruler.cursorX + t, ruler.northEnd)
+            ctx.moveTo(backend.cursorX - t, backend.northEnd)
+            ctx.lineTo(backend.cursorX + t, backend.northEnd)
             // South tip (horizontal tick)
-            ctx.moveTo(ruler.cursorX - t, ruler.southEnd)
-            ctx.lineTo(ruler.cursorX + t, ruler.southEnd)
+            ctx.moveTo(backend.cursorX - t, backend.southEnd)
+            ctx.lineTo(backend.cursorX + t, backend.southEnd)
             // West tip (vertical tick)
-            ctx.moveTo(ruler.westEnd, ruler.cursorY - t)
-            ctx.lineTo(ruler.westEnd, ruler.cursorY + t)
+            ctx.moveTo(backend.westEnd, backend.cursorY - t)
+            ctx.lineTo(backend.westEnd, backend.cursorY + t)
             // East tip (vertical tick)
-            ctx.moveTo(ruler.eastEnd, ruler.cursorY - t)
-            ctx.lineTo(ruler.eastEnd, ruler.cursorY + t)
+            ctx.moveTo(backend.eastEnd, backend.cursorY - t)
+            ctx.lineTo(backend.eastEnd, backend.cursorY + t)
 
             ctx.stroke()
         }
@@ -99,13 +129,13 @@ Window {
     Rectangle {
         id: labelBox
 
-        x:       ruler.cursorX + 14
-        y:       ruler.cursorY + 4
+        x:       (hasBackend ? backend.cursorX : -14) + 14
+        y:       (hasBackend ? backend.cursorY : -4) + 4
         width:   labelColumn.width  + 12
         height:  labelColumn.height + 12
         color:   Qt.rgba(0, 0, 0, 0.63)
         radius:  3
-        visible: ruler.cursorX >= 0
+        visible: hasBackend && backend.cursorX >= 0
 
         Column {
             id: labelColumn
@@ -113,7 +143,7 @@ Window {
             spacing: 2
 
             Text {
-                text:             "W: " + ruler.widthPx  + " px"
+                text:             "W: " + (hasBackend ? backend.widthPx : 0)  + " px"
                 color:            "#FFFF3C"
                 font.family:      "DejaVu Sans Mono, Consolas, monospace"
                 font.pointSize:   13
@@ -121,7 +151,7 @@ Window {
             }
 
             Text {
-                text:             "H: " + ruler.heightPx + " px"
+                text:             "H: " + (hasBackend ? backend.heightPx : 0) + " px"
                 color:            "#FFFF3C"
                 font.family:      "DejaVu Sans Mono, Consolas, monospace"
                 font.pointSize:   13

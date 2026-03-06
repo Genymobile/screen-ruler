@@ -21,8 +21,11 @@ Controls
 import sys
 import os
 import argparse
+import atexit
+import time
 import shutil
 import subprocess
+import tempfile
 
 import numpy as np
 
@@ -54,6 +57,7 @@ from PyQt6.QtQml import QQmlApplicationEngine
 # ---------------------------------------------------------------------------
 
 TIMER_INTERVAL_MS = 16                  # ≈ 60 FPS
+CAPTURE_DELAY_MS = 250                  # small delay before initial screenshot
 
 # ---------------------------------------------------------------------------
 # Pure-logic helpers (module-level so they can be unit-tested without a display)
@@ -323,6 +327,59 @@ def _capture_tool_hint() -> str | None:
     return None
 
 
+def _edge_map_to_qimage(edge_map: np.ndarray) -> QImage:
+    """Convert a boolean edge map to a displayable grayscale ``QImage``."""
+    if edge_map.ndim != 2 or edge_map.shape[0] <= 0 or edge_map.shape[1] <= 0:
+        raise ValueError("Edge map must be a non-empty 2-D array.")
+
+    grayscale = (edge_map.astype(np.uint8) * 255).copy(order="C")
+    height, width = grayscale.shape
+    image = QImage(
+        grayscale.data,
+        width,
+        height,
+        width,
+        QImage.Format.Format_Grayscale8,
+    )
+    return image.copy()
+
+
+def _create_temp_image_source(image: QImage, prefix: str) -> str | None:
+    """Persist a QImage as a temp PNG and return a file URL for QML."""
+    if image.isNull() or image.width() <= 0 or image.height() <= 0:
+        return None
+
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".png")
+    os.close(fd)
+
+    if not image.save(path, "PNG"):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return None
+
+    def _cleanup() -> None:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+    atexit.register(_cleanup)
+    return QUrl.fromLocalFile(path).toString()
+
+
+def _create_debug_edge_overlay_source(edge_map: np.ndarray) -> str | None:
+    """Persist the edge map as a temp PNG and return a file URL for QML."""
+    image = _edge_map_to_qimage(edge_map)
+    return _create_temp_image_source(image, "screen-ruler-edge-")
+
+
+def _create_screenshot_overlay_source(qimage: QImage) -> str | None:
+    """Persist the captured screenshot as a temp PNG and return a file URL."""
+    return _create_temp_image_source(qimage, "screen-ruler-shot-")
+
+
 # ---------------------------------------------------------------------------
 # Optional X11 click-through support
 # ---------------------------------------------------------------------------
@@ -389,6 +446,7 @@ class RulerBackend(QObject):
     """
 
     dataChanged = pyqtSignal()
+    staticChanged = pyqtSignal()
 
     def __init__(
         self,
@@ -399,6 +457,8 @@ class RulerBackend(QObject):
         virtual_y: int,
         virtual_w: int,
         virtual_h: int,
+        screenshot_source: str = "",
+        debug_overlay_source: str = "",
     ) -> None:
         super().__init__()
         self._edge_map = edge_map
@@ -408,6 +468,9 @@ class RulerBackend(QObject):
         self._vy = virtual_y
         self._vw = virtual_w
         self._vh = virtual_h
+        self._screenshot_source = screenshot_source
+        self._debug_overlay_source = debug_overlay_source
+        self._is_wayland = os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
         self._cx: int = -1
         self._cy: int = -1
         self._d_n: int = 0
@@ -453,21 +516,41 @@ class RulerBackend(QObject):
     def heightPx(self) -> int:
         return self._H
 
-    @pyqtProperty(int, notify=dataChanged)
+    @pyqtProperty(int, notify=staticChanged)
     def virtualDesktopX(self) -> int:
         return self._vx
 
-    @pyqtProperty(int, notify=dataChanged)
+    @pyqtProperty(int, notify=staticChanged)
     def virtualDesktopY(self) -> int:
         return self._vy
 
-    @pyqtProperty(int, notify=dataChanged)
+    @pyqtProperty(int, notify=staticChanged)
     def virtualDesktopWidth(self) -> int:
         return self._vw
 
-    @pyqtProperty(int, notify=dataChanged)
+    @pyqtProperty(int, notify=staticChanged)
     def virtualDesktopHeight(self) -> int:
         return self._vh
+
+    @pyqtProperty(bool, notify=staticChanged)
+    def debugOverlayEnabled(self) -> bool:
+        return bool(self._debug_overlay_source)
+
+    @pyqtProperty(str, notify=staticChanged)
+    def debugOverlaySource(self) -> str:
+        return self._debug_overlay_source
+
+    @pyqtProperty(bool, notify=staticChanged)
+    def screenshotAvailable(self) -> bool:
+        return bool(self._screenshot_source)
+
+    @pyqtProperty(str, notify=staticChanged)
+    def screenshotSource(self) -> str:
+        return self._screenshot_source
+
+    @pyqtProperty(bool, notify=staticChanged)
+    def isWaylandSession(self) -> bool:
+        return self._is_wayland
 
     # ------------------------------------------------------------------
     # Cursor polling (called by QTimer at ~60 Hz)
@@ -529,6 +612,14 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="Upper Canny edge-detection threshold (default: 150)",
     )
+    parser.add_argument(
+        "--debug-edge-overlay",
+        action="store_true",
+        help=(
+            "Show the captured Canny edge map as a 30%-opacity overlay "
+            "for alignment debugging"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -555,6 +646,9 @@ def main() -> None:
     all_rect = QRect()
     for screen in app.screens():
         all_rect = all_rect.united(screen.geometry())
+
+    if CAPTURE_DELAY_MS > 0:
+        time.sleep(CAPTURE_DELAY_MS / 1000.0)
 
     print("Capturing screen…")
     qimage = capture_screen(app)
@@ -590,6 +684,22 @@ def main() -> None:
         dpr_x = edge_map.shape[1] / all_rect.width()
         dpr_y = edge_map.shape[0] / all_rect.height()
 
+    debug_overlay_source = ""
+    screenshot_source = _create_screenshot_overlay_source(qimage) or ""
+    if not screenshot_source:
+        print(
+            "Warning: failed to create screenshot background image.",
+            file=sys.stderr,
+        )
+
+    if args.debug_edge_overlay:
+        debug_overlay_source = _create_debug_edge_overlay_source(edge_map) or ""
+        if not debug_overlay_source:
+            print(
+                "Warning: failed to create debug edge overlay image.",
+                file=sys.stderr,
+            )
+
     ruler = RulerBackend(
         edge_map,
         dpr_x,
@@ -598,6 +708,8 @@ def main() -> None:
         all_rect.y(),
         all_rect.width(),
         all_rect.height(),
+        screenshot_source,
+        debug_overlay_source,
     )
 
     engine = QQmlApplicationEngine()

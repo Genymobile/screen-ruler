@@ -11,6 +11,7 @@ import pytest
 
 # Import only the pure-logic symbols; avoid triggering any Qt initialisation.
 from screen_ruler import trace_ray, compute_edge_map, _capture_screen_external
+from screen_ruler import _edge_map_to_qimage
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +250,24 @@ class TestExternalCaptureFallback:
 
         image = _capture_screen_external(QRect(0, 0, 50, 50))
         assert image.isNull()
+
+
+class TestDebugEdgeOverlay:
+    """Tests for debug overlay conversion helpers."""
+
+    def test_edge_map_to_qimage_dimensions(self):
+        edge_map = np.zeros((12, 34), dtype=bool)
+        edge_map[5, 10] = True
+
+        image = _edge_map_to_qimage(edge_map)
+
+        assert not image.isNull()
+        assert image.width() == 34
+        assert image.height() == 12
+
+    def test_edge_map_to_qimage_rejects_invalid_shape(self):
+        with pytest.raises(ValueError, match="non-empty 2-D"):
+            _edge_map_to_qimage(np.array([], dtype=bool))
 
     def test_external_failure_returns_empty_image(self, monkeypatch):
         import screen_ruler

@@ -31,13 +31,14 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python screen_ruler.py [--threshold-low N] [--threshold-high N]
+python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-overlay]
 ```
 
 | Option | Default | Description |
 |---|---|---|
 | `--threshold-low N` | 50 | Lower hysteresis threshold for the Canny edge detector |
 | `--threshold-high N` | 150 | Upper hysteresis threshold for the Canny edge detector |
+| `--debug-edge-overlay` | off | Show the captured Canny edge map at 70% opacity for alignment debugging |
 
 **Controls**
 
