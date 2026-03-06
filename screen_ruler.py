@@ -22,7 +22,6 @@ import sys
 import os
 import argparse
 import atexit
-import time
 import shutil
 import subprocess
 import tempfile
@@ -57,7 +56,7 @@ from PyQt6.QtQml import QQmlApplicationEngine
 # ---------------------------------------------------------------------------
 
 TIMER_INTERVAL_MS = 16                  # ≈ 60 FPS
-CAPTURE_DELAY_MS = 250                  # small delay before initial screenshot
+CAPTURE_SETTLE_MS = 250                 # keep latest frame, then snapshot after settle window
 
 # ---------------------------------------------------------------------------
 # Pure-logic helpers (module-level so they can be unit-tested without a display)
@@ -233,10 +232,15 @@ def _capture_screen_qt_native(
     session.setVideoOutput(sink)
     capture.setScreen(screen)
 
-    result: dict[str, QImage] = {"image": QImage()}
+    result: dict[str, QImage] = {
+        "image": QImage(),
+        "latest": QImage(),
+    }
     loop = QEventLoop()
     timer = QTimer()
     timer.setSingleShot(True)
+    settle_timer = QTimer()
+    settle_timer.setSingleShot(True)
 
     def finish() -> None:
         if loop.isRunning():
@@ -248,12 +252,21 @@ def _capture_screen_qt_native(
         image = frame.toImage()
         if image.isNull() or image.width() <= 0 or image.height() <= 0:
             return
-        result["image"] = image
+        result["latest"] = image
+        if not settle_timer.isActive():
+            settle_timer.start(CAPTURE_SETTLE_MS)
+
+    def on_settled() -> None:
+        latest = result["latest"]
+        if latest.isNull() or latest.width() <= 0 or latest.height() <= 0:
+            return
+        result["image"] = latest
         finish()
 
     sink.videoFrameChanged.connect(on_frame)
     capture.errorOccurred.connect(lambda *_: finish())
     timer.timeout.connect(finish)
+    settle_timer.timeout.connect(on_settled)
 
     timer.start(timeout_ms)
     capture.start()
@@ -595,9 +608,6 @@ def main() -> None:
     all_rect = QRect()
     for screen in app.screens():
         all_rect = all_rect.united(screen.geometry())
-
-    if CAPTURE_DELAY_MS > 0:
-        time.sleep(CAPTURE_DELAY_MS / 1000.0)
 
     print("Capturing screen…")
     qimage = capture_screen(app)
