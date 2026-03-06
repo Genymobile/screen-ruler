@@ -11,11 +11,14 @@ the vertical height H.
 
 Usage
 -----
-    python screen_ruler.py [--threshold-low N] [--threshold-high N]
+    python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-overlay]
 
 Controls
 --------
     Escape / Q : quit
+    Left click : copy current "W × H px" to clipboard and quit
+    Top slider : live sensitivity tuning (recomputes edge map)
+                 and shows a short edge-map preview animation
 """
 
 import sys
@@ -58,6 +61,8 @@ from PyQt6.QtQml import QQmlApplicationEngine
 
 TIMER_INTERVAL_MS = 16                  # ≈ 60 FPS
 CAPTURE_SETTLE_MS = 250                 # keep latest frame, then snapshot after settle window
+SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
+CANNY_BLUR_SIGMA = 0.35                 # lower than OpenCV default auto-sigma for sharper edges
 
 # ---------------------------------------------------------------------------
 # Pure-logic helpers (module-level so they can be unit-tested without a display)
@@ -166,7 +171,7 @@ def compute_edge_map(
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     # Pre-blur: cv2.Canny has no internal smoothing step, and raw screen
     # captures contain too much high-frequency noise to use Canny directly.
-    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    blurred = cv2.GaussianBlur(gray, (3, 3), CANNY_BLUR_SIGMA)
     edges = cv2.Canny(blurred, threshold_low, threshold_high)
     return edges.astype(bool)
 
@@ -394,6 +399,23 @@ def _create_screenshot_overlay_source(qimage: QImage) -> str | None:
     return _create_temp_image_source(qimage, "screen-ruler-shot-")
 
 
+def _sensitivity_to_thresholds(sensitivity: float) -> tuple[int, int]:
+    """Map user-facing sensitivity (0..100) to Canny thresholds."""
+    s = max(0.0, min(100.0, sensitivity))
+    low = int(round(20 + (100 - s) * 0.6))
+    high = int(round(80 + (100 - s) * 1.4))
+    if high <= low:
+        high = min(255, low + 1)
+    return low, high
+
+
+def _thresholds_to_sensitivity(threshold_low: int, threshold_high: int) -> float:
+    """Approximate sensitivity (0..100) from Canny thresholds."""
+    s_from_low = 100.0 - ((threshold_low - 20) / 0.6)
+    s_from_high = 100.0 - ((threshold_high - 80) / 1.4)
+    return max(0.0, min(100.0, (s_from_low + s_from_high) / 2.0))
+
+
 # ---------------------------------------------------------------------------
 # QML backend: exposes ruler data as Qt properties for QML bindings
 # ---------------------------------------------------------------------------
@@ -410,6 +432,8 @@ class RulerBackend(QObject):
 
     dataChanged = pyqtSignal()
     staticChanged = pyqtSignal()
+    controlsChanged = pyqtSignal()
+    edgeMapPreviewRequested = pyqtSignal()
 
     def __init__(
         self,
@@ -420,6 +444,10 @@ class RulerBackend(QObject):
         virtual_y: int,
         virtual_w: int,
         virtual_h: int,
+        source_image: QImage,
+        threshold_low: int,
+        threshold_high: int,
+        always_show_debug_overlay: bool,
         screenshot_source: str = "",
         debug_overlay_source: str = "",
     ) -> None:
@@ -431,8 +459,14 @@ class RulerBackend(QObject):
         self._vy = virtual_y
         self._vw = virtual_w
         self._vh = virtual_h
+        self._source_image = source_image
+        self._threshold_low = threshold_low
+        self._threshold_high = threshold_high
+        self._sensitivity = _thresholds_to_sensitivity(threshold_low, threshold_high)
+        self._always_show_debug_overlay = always_show_debug_overlay
         self._screenshot_source = screenshot_source
         self._debug_overlay_source = debug_overlay_source
+        self._overlay_version = 0
         self._is_wayland = os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
         self._cx: int = -1
         self._cy: int = -1
@@ -442,6 +476,10 @@ class RulerBackend(QObject):
         self._d_e: int = 0
         self._W: int = 0
         self._H: int = 0
+
+        self._recompute_timer = QTimer(self)
+        self._recompute_timer.setSingleShot(True)
+        self._recompute_timer.timeout.connect(self._recompute_edge_map)
 
     # ------------------------------------------------------------------
     # Properties read by QML
@@ -495,13 +533,17 @@ class RulerBackend(QObject):
     def virtualDesktopHeight(self) -> int:
         return self._vh
 
-    @pyqtProperty(bool, notify=staticChanged)
+    @pyqtProperty(bool, notify=controlsChanged)
     def debugOverlayEnabled(self) -> bool:
-        return bool(self._debug_overlay_source)
+        return self._always_show_debug_overlay and bool(self._debug_overlay_source)
 
-    @pyqtProperty(str, notify=staticChanged)
+    @pyqtProperty(str, notify=controlsChanged)
     def debugOverlaySource(self) -> str:
         return self._debug_overlay_source
+
+    @pyqtProperty(float, notify=controlsChanged)
+    def sensitivity(self) -> float:
+        return self._sensitivity
 
     @pyqtProperty(bool, notify=staticChanged)
     def screenshotAvailable(self) -> bool:
@@ -520,12 +562,15 @@ class RulerBackend(QObject):
     # ------------------------------------------------------------------
 
     def poll(self) -> None:
+        self._update_measurement(force=False)
+
+    def _update_measurement(self, force: bool) -> None:
         """Re-trace rays from the current cursor position and emit dataChanged."""
         pos = QCursor.pos()
         global_x, global_y = pos.x(), pos.y()
         lx = global_x - self._vx
         ly = global_y - self._vy
-        if lx == self._cx and ly == self._cy:
+        if not force and lx == self._cx and ly == self._cy:
             return
 
         map_h, map_w = self._edge_map.shape
@@ -548,10 +593,37 @@ class RulerBackend(QObject):
 
         self.dataChanged.emit()
 
+    @pyqtSlot(float)
+    def setSensitivity(self, sensitivity: float) -> None:
+        clamped = max(0.0, min(100.0, float(sensitivity)))
+        if abs(clamped - self._sensitivity) < 0.01:
+            return
+        self._sensitivity = clamped
+        self._threshold_low, self._threshold_high = _sensitivity_to_thresholds(clamped)
+        self.controlsChanged.emit()
+        self._recompute_timer.start(SENSITIVITY_RECOMPUTE_DEBOUNCE_MS)
+
+    def _recompute_edge_map(self) -> None:
+        try:
+            self._edge_map = compute_edge_map(
+                self._source_image,
+                self._threshold_low,
+                self._threshold_high,
+            )
+            source = _create_debug_edge_overlay_source(self._edge_map)
+            if source:
+                self._overlay_version += 1
+                self._debug_overlay_source = f"{source}?v={self._overlay_version}"
+                self.controlsChanged.emit()
+            self._update_measurement(force=True)
+            self.edgeMapPreviewRequested.emit()
+        except Exception:
+            pass
+
     @pyqtSlot()
     def copySizeToClipboardAndQuit(self) -> None:
-        self.poll()
-        text = f"{self._W} × {self._H}"
+        self._update_measurement(force=True)
+        text = f"{self._W} × {self._H} px"
         clipboard = QGuiApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(text, QClipboard.Mode.Clipboard)
@@ -630,6 +702,12 @@ def _find_qml() -> str:
 def main() -> None:
     args = parse_args()
 
+    try:
+        from PyQt6.QtQuickControls2 import QQuickStyle
+        QQuickStyle.setStyle("Universal")
+    except Exception:
+        os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Universal")
+
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Screen Ruler")
 
@@ -672,21 +750,18 @@ def main() -> None:
         dpr_x = edge_map.shape[1] / all_rect.width()
         dpr_y = edge_map.shape[0] / all_rect.height()
 
-    debug_overlay_source = ""
+    debug_overlay_source = _create_debug_edge_overlay_source(edge_map) or ""
     screenshot_source = _create_screenshot_overlay_source(qimage) or ""
     if not screenshot_source:
         print(
             "Warning: failed to create screenshot background image.",
             file=sys.stderr,
         )
-
-    if args.debug_edge_overlay:
-        debug_overlay_source = _create_debug_edge_overlay_source(edge_map) or ""
-        if not debug_overlay_source:
-            print(
-                "Warning: failed to create debug edge overlay image.",
-                file=sys.stderr,
-            )
+    if not debug_overlay_source:
+        print(
+            "Warning: failed to create debug edge overlay image.",
+            file=sys.stderr,
+        )
 
     ruler = RulerBackend(
         edge_map,
@@ -696,6 +771,10 @@ def main() -> None:
         all_rect.y(),
         all_rect.width(),
         all_rect.height(),
+        qimage,
+        args.threshold_low,
+        args.threshold_high,
+        args.debug_edge_overlay,
         screenshot_source,
         debug_overlay_source,
     )

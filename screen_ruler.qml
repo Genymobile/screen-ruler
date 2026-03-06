@@ -11,6 +11,7 @@
 
 import QtQuick
 import QtQuick.Window
+import QtQuick.Controls
 
 Window {
     id: root
@@ -21,18 +22,49 @@ Window {
     readonly property int crosshairLineWidth: 1
     readonly property int crosshairTickHalfLength: 5
 
-    readonly property int labelOffsetX: 14
+    readonly property int uiBaseMargin: 14
+    readonly property int uiCornerRadius: 5
+    readonly property color uiPanelBackgroundColor: Qt.rgba(0.16, 0.17, 0.19, 1.0)
+    readonly property real uiPanelOpacity: 0.9
+    readonly property color uiPrimaryTextColor: "#D7DADF"
+
+    readonly property int labelOffsetX: uiBaseMargin
     readonly property int labelOffsetY: 4
     readonly property int labelShadowOffset: 2
-    readonly property int labelRadius: 5
+    readonly property int labelRadius: uiCornerRadius
     readonly property int labelHorizontalPadding: 18
     readonly property int labelVerticalPadding: 12
-    readonly property real labelOpacity: 0.8
-    readonly property color labelBackgroundColor: Qt.rgba(0.16, 0.17, 0.19, 1.0)
+    readonly property real labelOpacity: uiPanelOpacity
+    readonly property color labelBackgroundColor: uiPanelBackgroundColor
     readonly property color labelShadowColor: Qt.rgba(0, 0, 0, 0.22)
-    readonly property color labelTextColor: "#D7DADF"
+    readonly property color labelTextColor: uiPrimaryTextColor
 
     readonly property real debugOverlayOpacity: 0.3
+    readonly property int edgePreviewHoldMs: 1000
+    readonly property int edgePreviewFadeMs: 1000
+    readonly property real edgePreviewPeakOpacity: 0.5
+    property real edgePreviewOpacity: 0.0
+
+    readonly property int controlsTopMargin: uiBaseMargin
+    readonly property int controlsPanelWidth: 380
+    readonly property int controlsPanelHeight: 56
+    readonly property int controlsPanelRadius: uiCornerRadius
+    readonly property int controlsPanelZ: 30
+    readonly property color controlsPanelColor: uiPanelBackgroundColor
+    readonly property real controlsPanelOpacity: uiPanelOpacity
+    readonly property int controlsSideMargin: uiBaseMargin
+    readonly property int controlsRowSpacing: 12
+    readonly property color controlsTextColor: uiPrimaryTextColor
+    readonly property int controlsTitlePointSize: 11
+    readonly property int controlsValuePointSize: 10
+    readonly property int sensitivityMin: 0
+    readonly property int sensitivityMax: 100
+    readonly property int sensitivityStep: 1
+    readonly property int sensitivitySliderWidth: 240
+    readonly property int sensitivityDefaultValue: 50
+
+    readonly property int screenshotZ: -2
+    readonly property int edgeOverlayZ: -1
 
     // Position and size are driven by the virtual desktop bounds that Python
     // computed from the union of all screen geometries.
@@ -52,21 +84,90 @@ Window {
         visibility: hasBackend && backend.isWaylandSession ? Window.FullScreen : Window.Windowed
     title:   "Screen Ruler"
 
+    Shortcut {
+        sequence: "Escape"
+        onActivated: Qt.quit()
+    }
+
+    Shortcut {
+        sequence: "Q"
+        onActivated: Qt.quit()
+    }
+
     // -----------------------------------------------------------------------
     // Keyboard handling — Escape or Q exits the application
     // -----------------------------------------------------------------------
     Item {
         anchors.fill: parent
-        focus: true
-        Keys.onEscapePressed: Qt.quit()
-        Keys.onPressed: (event) => {
-            if (event.key === Qt.Key_Q) Qt.quit()
-        }
 
         MouseArea {
             anchors.fill: parent
             enabled: hasBackend
             onClicked: backend.copySizeToClipboardAndQuit()
+        }
+    }
+
+    Rectangle {
+        id: controlsPanel
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: controlsTopMargin
+        width: controlsPanelWidth
+        height: controlsPanelHeight
+        radius: controlsPanelRadius
+        color: controlsPanelColor
+        opacity: controlsPanelOpacity
+        z: controlsPanelZ
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: (mouse) => mouse.accepted = true
+        }
+
+        Row {
+            anchors.fill: parent
+            anchors.leftMargin: controlsSideMargin
+            anchors.rightMargin: controlsSideMargin
+            spacing: controlsRowSpacing
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Sensitivity"
+                color: controlsTextColor
+                font.pointSize: controlsTitlePointSize
+                font.bold: true
+            }
+
+            Slider {
+                id: sensitivitySlider
+                anchors.verticalCenter: parent.verticalCenter
+                from: sensitivityMin
+                to: sensitivityMax
+                stepSize: sensitivityStep
+                width: sensitivitySliderWidth
+                enabled: hasBackend
+                value: hasBackend ? backend.sensitivity : sensitivityDefaultValue
+                onMoved: {
+                    edgePreviewOpacity = edgePreviewPeakOpacity
+                    if (hasBackend) backend.setSensitivity(value)
+                }
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: Math.round(sensitivitySlider.value)
+                color: controlsTextColor
+                font.pointSize: controlsValuePointSize
+            }
+        }
+
+        Connections {
+            target: hasBackend ? backend : null
+            function onControlsChanged() {
+                if (!sensitivitySlider.pressed) {
+                    sensitivitySlider.value = backend.sensitivity
+                }
+            }
         }
     }
 
@@ -80,7 +181,7 @@ Window {
         fillMode: Image.Stretch
         smooth: false
         opacity: 1.0
-        z: -2
+        z: screenshotZ
     }
 
     // -----------------------------------------------------------------------
@@ -88,12 +189,42 @@ Window {
     // -----------------------------------------------------------------------
     Image {
         anchors.fill: parent
-        visible: hasBackend && backend.debugOverlayEnabled
+        visible: hasBackend
+                 && backend.debugOverlaySource !== ""
+                 && (backend.debugOverlayEnabled || edgePreviewOpacity > 0)
         source: hasBackend ? backend.debugOverlaySource : ""
         fillMode: Image.Stretch
         smooth: false
-        opacity: debugOverlayOpacity
-        z: -1
+        opacity: hasBackend && backend.debugOverlayEnabled
+                 ? Math.max(debugOverlayOpacity, edgePreviewOpacity)
+                 : edgePreviewOpacity
+        z: edgeOverlayZ
+    }
+
+    Connections {
+        target: hasBackend ? backend : null
+        function onEdgeMapPreviewRequested() {
+            edgePreviewAnimation.restart()
+        }
+    }
+
+    SequentialAnimation {
+        id: edgePreviewAnimation
+        PropertyAction {
+            target: root
+            property: "edgePreviewOpacity"
+            value: edgePreviewPeakOpacity
+        }
+        PauseAnimation {
+            duration: edgePreviewHoldMs
+        }
+        NumberAnimation {
+            target: root
+            property: "edgePreviewOpacity"
+            to: 0
+            duration: edgePreviewFadeMs
+            easing.type: Easing.OutQuad
+        }
     }
 
     // -----------------------------------------------------------------------

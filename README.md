@@ -38,13 +38,15 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 |---|---|---|
 | `--threshold-low N` | 50 | Lower hysteresis threshold for the Canny edge detector |
 | `--threshold-high N` | 150 | Upper hysteresis threshold for the Canny edge detector |
-| `--debug-edge-overlay` | off | Show the captured Canny edge map at 70% opacity for alignment debugging |
+| `--debug-edge-overlay` | off | Keep the captured Canny edge map visible (base opacity) for debugging; slider changes also trigger a transient edge preview |
 
 **Controls**
 
-| Key | Action |
+| Input | Action |
 |---|---|
 | `Escape` or `Q` | Quit |
+| Left click | Copy current measurement as `W × H px` to clipboard, then quit |
+| Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
 
 ---
 
