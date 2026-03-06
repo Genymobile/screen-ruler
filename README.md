@@ -58,7 +58,7 @@ pyinstaller screen_ruler.spec
 
 The binary is written to `dist/screen-ruler`. Copy it anywhere and run it directly — no Python or library installation needed on the target machine.
 
-> **Note:** the executable bundles all dependencies and is therefore ~100 MB. This is expected for an application that ships PyQt5, NumPy, and OpenCV.
+> **Note:** the executable bundles all dependencies and is therefore ~100 MB. This is expected for an application that ships PyQt6, NumPy, and OpenCV.
 
 ---
 
@@ -73,4 +73,4 @@ The binary is written to `dist/screen-ruler`. Copy it anywhere and run it direct
    pytest tests/
    ```
 3. The pure-logic helpers (`trace_ray`, `compute_edge_map`) are module-level functions specifically so they can be tested without a display. Keep new logic in the same style when possible.
-4. The overlay widget (`ScreenRulerOverlay`) and screen-capture code require a running Qt application and are not covered by the unit tests.
+4. The QML overlay (`screen_ruler.qml`) and screen-capture code require a running Qt application and are not covered by the unit tests.

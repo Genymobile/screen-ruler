@@ -188,3 +188,10 @@ class TestComputeEdgeMap:
         # Should not raise
         edge_map = compute_edge_map(img, threshold_low=10, threshold_high=200)
         assert edge_map.shape == (20, 20)
+
+    def test_empty_qimage_raises_value_error(self):
+        """A null/empty QImage should fail with a clear ValueError."""
+        from PyQt6.QtGui import QImage
+
+        with pytest.raises(ValueError, match="empty screenshot"):
+            compute_edge_map(QImage())

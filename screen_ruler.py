@@ -127,15 +127,25 @@ def compute_edge_map(
     -------
     np.ndarray of dtype bool, shape ``(H, W)``
     """
+    if qimage is None or qimage.isNull() or qimage.width() <= 0 or qimage.height() <= 0:
+        raise ValueError("Cannot compute edge map from an empty screenshot.")
+
     qimage = qimage.convertToFormat(QImage.Format.Format_RGB888)
     width = qimage.width()
     height = qimage.height()
     # Qt may add per-row padding; bytesPerLine() is the actual stride.
     bytes_per_line = qimage.bytesPerLine()
     ptr = qimage.bits()
-    ptr.setsize(bytes_per_line * height)
+    if ptr is None:
+        raise ValueError("Cannot access screenshot pixel data.")
+    if hasattr(ptr, "setsize"):
+        ptr.setsize(bytes_per_line * height)
     # Read every row at full stride width, then discard the padding bytes.
-    raw = np.frombuffer(ptr, dtype=np.uint8).reshape((height, bytes_per_line))
+    raw = np.frombuffer(
+        ptr,
+        dtype=np.uint8,
+        count=bytes_per_line * height,
+    ).reshape((height, bytes_per_line))
     img = raw[:, : width * 3].reshape((height, width, 3)).copy()
 
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -151,9 +161,13 @@ def capture_screen(app: QGuiApplication) -> QImage:
     Grab a screenshot covering all connected monitors and return it as a
     ``QImage`` at the display's physical (device-pixel) resolution.
     """
+    screens = app.screens()
+    if not screens:
+        return QImage()
+
     # Build the bounding rectangle that encompasses every screen
     all_rect = QRect()
-    for screen in app.screens():
+    for screen in screens:
         all_rect = all_rect.united(screen.geometry())
 
     primary = app.primaryScreen()
@@ -234,7 +248,8 @@ class RulerBackend(QObject):
     def __init__(
         self,
         edge_map: np.ndarray,
-        dpr: float,
+        dpr_x: float,
+        dpr_y: float,
         virtual_x: int,
         virtual_y: int,
         virtual_w: int,
@@ -242,7 +257,8 @@ class RulerBackend(QObject):
     ) -> None:
         super().__init__()
         self._edge_map = edge_map
-        self._dpr = dpr
+        self._dpr_x = dpr_x
+        self._dpr_y = dpr_y
         self._vx = virtual_x
         self._vy = virtual_y
         self._vw = virtual_w
@@ -315,13 +331,15 @@ class RulerBackend(QObject):
     def poll(self) -> None:
         """Re-trace rays from the current cursor position and emit dataChanged."""
         pos = QCursor.pos()
-        lx, ly = pos.x(), pos.y()
+        global_x, global_y = pos.x(), pos.y()
+        lx = global_x - self._vx
+        ly = global_y - self._vy
         if lx == self._cx and ly == self._cy:
             return
 
         map_h, map_w = self._edge_map.shape
-        ex = max(0, min(int(lx * self._dpr), map_w - 1))
-        ey = max(0, min(int(ly * self._dpr), map_h - 1))
+        ex = max(0, min(int(lx * self._dpr_x), map_w - 1))
+        ey = max(0, min(int(ly * self._dpr_y), map_h - 1))
 
         d_n = trace_ray(self._edge_map, ex, ey, 0, -1)
         d_s = trace_ray(self._edge_map, ex, ey, 0, 1)
@@ -330,12 +348,12 @@ class RulerBackend(QObject):
 
         self._cx = lx
         self._cy = ly
-        self._d_n = int(d_n / self._dpr)
-        self._d_s = int(d_s / self._dpr)
-        self._d_w = int(d_w / self._dpr)
-        self._d_e = int(d_e / self._dpr)
-        self._W = d_w + d_e
-        self._H = d_n + d_s
+        self._d_n = int(d_n / self._dpr_y)
+        self._d_s = int(d_s / self._dpr_y)
+        self._d_w = int(d_w / self._dpr_x)
+        self._d_e = int(d_e / self._dpr_x)
+        self._W = self._d_w + self._d_e
+        self._H = self._d_n + self._d_s
 
         self.dataChanged.emit()
 
@@ -388,10 +406,6 @@ def main() -> None:
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Screen Ruler")
 
-    # HIDPI: query device pixel ratio from the primary screen
-    primary_screen = app.primaryScreen()
-    dpr = primary_screen.devicePixelRatio()
-
     # Compute virtual desktop bounds (union of all screen geometries)
     all_rect = QRect()
     for screen in app.screens():
@@ -404,17 +418,34 @@ def main() -> None:
         f"Computing edge map  "
         f"(Canny thresholds: {args.threshold_low} / {args.threshold_high})…"
     )
-    edge_map = compute_edge_map(
-        qimage, args.threshold_low, args.threshold_high
-    )
+    try:
+        edge_map = compute_edge_map(
+            qimage, args.threshold_low, args.threshold_high
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        print(
+            "Screenshot capture may be unavailable in this desktop/session "
+            "environment.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     print(
         f"Edge map: {edge_map.shape[1]}×{edge_map.shape[0]} px  |  "
         f"{edge_map.sum():,} edge pixels found."
     )
 
+    if all_rect.width() <= 0 or all_rect.height() <= 0:
+        dpr_x = 1.0
+        dpr_y = 1.0
+    else:
+        dpr_x = edge_map.shape[1] / all_rect.width()
+        dpr_y = edge_map.shape[0] / all_rect.height()
+
     ruler = RulerBackend(
         edge_map,
-        dpr,
+        dpr_x,
+        dpr_y,
         all_rect.x(),
         all_rect.y(),
         all_rect.width(),
