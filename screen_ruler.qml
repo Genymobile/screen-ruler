@@ -18,6 +18,29 @@ Window {
     property var backend: (typeof ruler !== "undefined" ? ruler : null)
     property bool hasBackend: backend !== null
 
+    function clampSensitivity(value) {
+        return Math.max(sensitivityMin, Math.min(sensitivityMax, value))
+    }
+
+    function adjustSensitivityByWheel(wheelDeltaY) {
+        if (!hasBackend || wheelDeltaY === 0)
+            return
+
+        var notchSteps = wheelDeltaY / 120
+        if (notchSteps === 0)
+            notchSteps = wheelDeltaY > 0 ? 1 : -1
+
+        var nextValue = clampSensitivity(
+            sensitivitySlider.value + notchSteps * sensitivityStep
+        )
+        if (nextValue === sensitivitySlider.value)
+            return
+
+        edgePreviewOpacity = edgePreviewPeakOpacity
+        sensitivitySlider.value = nextValue
+        backend.setSensitivity(nextValue)
+    }
+
     readonly property color crosshairColor: "#00DCFF"
     readonly property int crosshairLineWidth: 1
     readonly property int crosshairTickHalfLength: 5
@@ -104,6 +127,10 @@ Window {
             anchors.fill: parent
             enabled: hasBackend
             onClicked: backend.copySizeToClipboardAndQuit()
+            onWheel: (wheel) => {
+                root.adjustSensitivityByWheel(wheel.angleDelta.y)
+                wheel.accepted = true
+            }
         }
     }
 
