@@ -381,57 +381,6 @@ def _create_screenshot_overlay_source(qimage: QImage) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Optional X11 click-through support
-# ---------------------------------------------------------------------------
-
-
-def _try_set_click_through_x11(window) -> None:
-    """
-    Attempt to make *window* fully click-through on X11/Linux by
-    setting an empty ``ShapeInput`` region via the XFixes extension.
-    Silently ignored on non-X11 platforms or if the libraries are absent.
-    """
-    if os.environ.get("XDG_SESSION_TYPE", "").strip().lower() != "x11":
-        return
-
-    try:
-        import ctypes
-        import ctypes.util
-
-        libx11_name = ctypes.util.find_library("X11")
-        libxfixes_name = ctypes.util.find_library("Xfixes")
-        if not libx11_name or not libxfixes_name:
-            return
-
-        x11 = ctypes.cdll.LoadLibrary(libx11_name)
-        xfixes = ctypes.cdll.LoadLibrary(libxfixes_name)
-
-        x11.XOpenDisplay.restype = ctypes.c_void_p
-        xfixes.XFixesCreateRegion.restype = ctypes.c_ulong
-        xfixes.XFixesSetWindowShapeRegion.argtypes = [
-            ctypes.c_void_p,  # display
-            ctypes.c_ulong,   # window id
-            ctypes.c_int,     # shape_kind  (ShapeInput = 2)
-            ctypes.c_int,     # x_off
-            ctypes.c_int,     # y_off
-            ctypes.c_ulong,   # region
-        ]
-
-        display = x11.XOpenDisplay(None)
-        if not display:
-            return
-
-        win_id = int(window.winId())
-        region = xfixes.XFixesCreateRegion(display, None, 0)
-        xfixes.XFixesSetWindowShapeRegion(display, win_id, 2, 0, 0, region)
-        xfixes.XFixesDestroyRegion(display, region)
-        x11.XFlush(display)
-        x11.XCloseDisplay(display)
-    except Exception:
-        pass  # click-through is a best-effort feature
-
-
-# ---------------------------------------------------------------------------
 # QML backend: exposes ruler data as Qt properties for QML bindings
 # ---------------------------------------------------------------------------
 
@@ -719,10 +668,6 @@ def main() -> None:
     if not engine.rootObjects():
         print("Error: failed to load QML UI", file=sys.stderr)
         sys.exit(1)
-
-    # Apply X11 click-through after the QQuickWindow is created
-    root_window = engine.rootObjects()[0]
-    _try_set_click_through_x11(root_window)
 
     # Start the cursor-polling timer
     timer = QTimer()
