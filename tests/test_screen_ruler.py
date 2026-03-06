@@ -359,3 +359,49 @@ class TestSnapPointToNearestEdge:
         assert result["snapped"] is False
         assert result["x"] == 2.0
         assert result["y"] == 2.0
+
+
+class TestDetectContainerAtPoint:
+    """Tests for experimental container detection from the edge map."""
+
+    def _backend(self, edge_map: np.ndarray) -> RulerBackend:
+        from PyQt6.QtGui import QImage
+
+        h, w = edge_map.shape
+        source_image = QImage(1, 1, QImage.Format.Format_RGB32)
+        return RulerBackend(
+            edge_map=edge_map,
+            dpr_x=1.0,
+            dpr_y=1.0,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=w,
+            virtual_h=h,
+            source_image=source_image,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+    def test_prefers_nearby_small_enclosed_zone(self):
+        """Near an internal divider, detect the nearby small enclosed region."""
+        edge_map = np.zeros((30, 30), dtype=bool)
+
+        # Outer frame
+        edge_map[2:28, 2] = True
+        edge_map[2:28, 27] = True
+        edge_map[2, 2:28] = True
+        edge_map[27, 2:28] = True
+
+        # Internal vertical divider creates a smaller right-side zone
+        edge_map[3:27, 20] = True
+
+        backend = self._backend(edge_map)
+
+        # Pointer sits on the divider line area: nearest enclosed zone should
+        # be the right-side smaller region.
+        result = backend.detectContainerAtPoint(20.0, 15.0)
+
+        assert result["available"] is True
+        assert result["x"] >= 20.0
+        assert result["width"] < 10.0

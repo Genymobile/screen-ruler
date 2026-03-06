@@ -37,6 +37,11 @@ Window {
     readonly property real rectTop: Math.min(rectStartY, rectEndY)
     readonly property real rectWidth: Math.abs(rectEndX - rectStartX)
     readonly property real rectHeight: Math.abs(rectEndY - rectStartY)
+    property bool containerHasSelection: false
+    property real containerX: 0
+    property real containerY: 0
+    property real containerWidth: 0
+    property real containerHeight: 0
     property real rectSnapDistance: 10
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
@@ -54,6 +59,11 @@ Window {
         } else {
             refreshSnappedPointer()
         }
+        if (activeMode !== modeContainerTrace) {
+            containerHasSelection = false
+        } else {
+            refreshContainerSelection()
+        }
     }
 
     function updatePointer(mouse) {
@@ -61,6 +71,27 @@ Window {
         pointerY = mouse.y
         if (activeMode === modeRectDrag)
             refreshSnappedPointer()
+        if (activeMode === modeContainerTrace)
+            refreshContainerSelection()
+    }
+
+    function refreshContainerSelection() {
+        if (!hasBackend || activeMode !== modeContainerTrace) {
+            containerHasSelection = false
+            return
+        }
+
+        var detected = backend.detectContainerAtPoint(pointerX, pointerY)
+        if (!detected || !detected.available) {
+            containerHasSelection = false
+            return
+        }
+
+        containerX = detected.x
+        containerY = detected.y
+        containerWidth = detected.width
+        containerHeight = detected.height
+        containerHasSelection = true
     }
 
     function refreshSnappedPointer() {
@@ -124,6 +155,7 @@ Window {
         edgePreviewOpacity = edgePreviewPeakOpacity
         backend.setSensitivity(clampSensitivity(value))
         refreshSnappedPointer()
+        refreshContainerSelection()
     }
 
     function applySnapDistanceValue(value) {
@@ -152,7 +184,11 @@ Window {
     function adjustActiveModeSliderByWheel(wheelDeltaY) {
         if (!hasBackend || wheelDeltaY === 0)
             return
-        if (activeMode !== modeDynamicEdge && activeMode !== modeRectDrag)
+        if (
+            activeMode !== modeDynamicEdge
+            && activeMode !== modeRectDrag
+            && activeMode !== modeContainerTrace
+        )
             return
 
         var notchSteps = wheelDeltaY / 120
@@ -335,7 +371,6 @@ Window {
                         id: modeButton
                         width: modeButtonSize
                         height: modeButtonSize
-                        enabled: index !== modeContainerTrace
                         checkable: true
                         checked: root.activeMode === index
                         focusPolicy: Qt.StrongFocus
@@ -351,7 +386,6 @@ Window {
 
                         contentItem: Canvas {
                             anchors.fill: parent
-                            opacity: index === modeContainerTrace ? 0.5 : 1
                             onPaint: {
                                 var ctx = getContext("2d")
                                 ctx.clearRect(0, 0, width, height)
@@ -420,7 +454,8 @@ Window {
                                       ? "Dynamic edge detection"
                                       : (index === modeRectDrag
                                          ? "Click-and-drag rectangle"
-                                         : "Experimental container trace (coming soon)")
+                                         : "Experimental container trace")
+
                     }
                 }
             }
@@ -428,7 +463,7 @@ Window {
             Row {
                 spacing: controlsRowSpacing
                 anchors.horizontalCenter: parent.horizontalCenter
-                opacity: root.activeMode === modeContainerTrace ? 0.6 : 1.0
+                opacity: 1.0
 
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
@@ -445,7 +480,7 @@ Window {
                     to: sensitivityMax
                     stepSize: sensitivityStep
                     width: sensitivitySliderWidth
-                    enabled: hasBackend && root.activeMode !== modeContainerTrace
+                    enabled: hasBackend
                     value: hasBackend ? backend.sensitivity : sensitivityDefaultValue
                     onMoved: {
                         root.applySensitivityValue(value)
@@ -464,7 +499,6 @@ Window {
                 spacing: controlsRowSpacing
                 anchors.horizontalCenter: parent.horizontalCenter
                 visible: root.activeMode === modeRectDrag
-                opacity: root.activeMode === modeRectDrag ? 1.0 : 0.6
 
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
@@ -504,6 +538,7 @@ Window {
                     sensitivitySlider.value = backend.sensitivity
                 }
                 root.refreshSnappedPointer()
+                root.refreshContainerSelection()
             }
         }
 
@@ -515,6 +550,7 @@ Window {
                 if (!snapDistanceSlider.pressed)
                     snapDistanceSlider.value = root.rectSnapDistance
                 root.refreshSnappedPointer()
+                root.refreshContainerSelection()
             }
         }
     }
@@ -640,6 +676,20 @@ Window {
         z: 1
     }
 
+    Rectangle {
+        id: containerSelectionRect
+
+        x: root.containerX
+        y: root.containerY
+        width: root.containerWidth
+        height: root.containerHeight
+        visible: root.activeMode === modeContainerTrace && root.containerHasSelection
+        color: "transparent"
+        border.width: 1
+        border.color: crosshairColor
+        z: 1
+    }
+
     Canvas {
         id: snappedPointerMarker
 
@@ -698,10 +748,14 @@ Window {
 
         x:       root.activeMode === modeRectDrag
                  ? root.rectLeft + labelOffsetX
-                 : (hasBackend ? backend.cursorX : -labelOffsetX) + labelOffsetX
+                      : (root.activeMode === modeContainerTrace
+                          ? root.containerX + labelOffsetX
+                          : (hasBackend ? backend.cursorX : -labelOffsetX) + labelOffsetX)
         y:       root.activeMode === modeRectDrag
                  ? root.rectTop + labelOffsetY
-                 : (hasBackend ? backend.cursorY : -labelOffsetY) + labelOffsetY
+                      : (root.activeMode === modeContainerTrace
+                          ? root.containerY + labelOffsetY
+                          : (hasBackend ? backend.cursorY : -labelOffsetY) + labelOffsetY)
         width:   sizeText.implicitWidth + labelHorizontalPadding
         height:  sizeText.implicitHeight + labelVerticalPadding
         color:   labelBackgroundColor
@@ -709,7 +763,9 @@ Window {
         radius:  labelRadius
         visible: root.activeMode === modeRectDrag
                  ? root.rectHasSelection
-                 : (hasBackend && backend.cursorX >= 0)
+                      : (root.activeMode === modeContainerTrace
+                          ? root.containerHasSelection
+                          : (hasBackend && backend.cursorX >= 0))
         z:       2
 
         Text {
@@ -717,10 +773,12 @@ Window {
             anchors.centerIn: parent
             text:             root.activeMode === modeRectDrag
                              ? (Math.round(root.rectWidth) + " × " + Math.round(root.rectHeight) + " px")
+                                      : (root.activeMode === modeContainerTrace
+                                          ? (Math.round(root.containerWidth) + " × " + Math.round(root.containerHeight) + " px")
                              : ((hasBackend ? backend.widthPx : 0)
                                 + " × "
                                 + (hasBackend ? backend.heightPx : 0)
-                                + " px")
+                                          + " px"))
             color:            labelTextColor
             font.family:      "DejaVu Sans Mono, Consolas, monospace"
             font.pointSize:   13

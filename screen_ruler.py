@@ -63,6 +63,8 @@ TIMER_INTERVAL_MS = 16                  # ≈ 60 FPS
 CAPTURE_SETTLE_MS = 250                 # keep latest frame, then snapshot after settle window
 SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
 CANNY_BLUR_SIGMA = 0.35                 # lower than OpenCV default auto-sigma for sharper edges
+REGION_CLOSE_KERNEL_SIZE = 3            # close tiny gaps before connected components
+REGION_DILATE_ITERATIONS = 1            # thicken barriers so small zones stay separated
 
 # ---------------------------------------------------------------------------
 # Pure-logic helpers (module-level so they can be unit-tested without a display)
@@ -479,10 +481,13 @@ class RulerBackend(QObject):
         self._d_e: int = 0
         self._W: int = 0
         self._H: int = 0
+        self._region_labels: np.ndarray | None = None
+        self._region_stats: np.ndarray | None = None
 
         self._recompute_timer = QTimer(self)
         self._recompute_timer.setSingleShot(True)
         self._recompute_timer.timeout.connect(self._recompute_edge_map)
+        self._recompute_regions()
 
     # ------------------------------------------------------------------
     # Properties read by QML
@@ -673,6 +678,122 @@ class RulerBackend(QObject):
         snapped = best_x_map is not None or best_y_map is not None
         return {"x": snapped_x, "y": snapped_y, "snapped": snapped}
 
+    def _recompute_regions(self) -> None:
+        """Build connected-component labels for non-edge free-space regions."""
+        edge_u8 = self._edge_map.astype(np.uint8)
+        kernel = np.ones((REGION_CLOSE_KERNEL_SIZE, REGION_CLOSE_KERNEL_SIZE), dtype=np.uint8)
+        closed = cv2.morphologyEx(edge_u8, cv2.MORPH_CLOSE, kernel)
+        barriers = cv2.dilate(closed, kernel, iterations=REGION_DILATE_ITERATIONS)
+        free_space = (barriers == 0).astype(np.uint8)
+        _, labels, stats, _ = cv2.connectedComponentsWithStats(
+            free_space,
+            connectivity=4,
+        )
+        self._region_labels = labels
+        self._region_stats = stats
+
+    def _region_label_near(self, ex: int, ey: int, max_radius: int = 3) -> int:
+        """Return a non-zero free-space region label near the map point."""
+        if self._region_labels is None or self._region_stats is None:
+            return 0
+
+        map_h, map_w = self._region_labels.shape
+        label = int(self._region_labels[ey, ex])
+        if label > 0:
+            return label
+
+        best_label = 0
+        best_dist2 = None
+        best_area = None
+        for radius in range(1, max_radius + 1):
+            min_x = max(0, ex - radius)
+            max_x = min(map_w - 1, ex + radius)
+            min_y = max(0, ey - radius)
+            max_y = min(map_h - 1, ey + radius)
+            window = self._region_labels[min_y:max_y + 1, min_x:max_x + 1]
+            ys, xs = np.where(window > 0)
+            if ys.size == 0:
+                continue
+
+            for index in range(ys.size):
+                my = int(min_y + ys[index])
+                mx = int(min_x + xs[index])
+                cand_label = int(self._region_labels[my, mx])
+                if cand_label <= 0:
+                    continue
+                dx = mx - ex
+                dy = my - ey
+                dist2 = dx * dx + dy * dy
+                area = int(self._region_stats[cand_label, cv2.CC_STAT_AREA])
+                if (
+                    best_dist2 is None
+                    or dist2 < best_dist2
+                    or (dist2 == best_dist2 and (best_area is None or area < best_area))
+                ):
+                    best_dist2 = dist2
+                    best_area = area
+                    best_label = cand_label
+
+            if best_label > 0:
+                return best_label
+
+        return best_label
+
+    @pyqtSlot(float, float, result="QVariant")
+    def detectContainerAtPoint(self, local_x: float, local_y: float) -> dict[str, float | bool]:
+        """Detect a container-like free-space region around a local point."""
+        if self._region_labels is None or self._region_stats is None:
+            return {
+                "available": False,
+                "x": 0.0,
+                "y": 0.0,
+                "width": 0.0,
+                "height": 0.0,
+            }
+
+        map_h, map_w = self._edge_map.shape
+        ex = max(0, min(int(round(float(local_x) * self._dpr_x)), map_w - 1))
+        ey = max(0, min(int(round(float(local_y) * self._dpr_y)), map_h - 1))
+
+        label = self._region_label_near(ex, ey)
+        if label <= 0 or label >= int(self._region_stats.shape[0]):
+            return {
+                "available": False,
+                "x": 0.0,
+                "y": 0.0,
+                "width": 0.0,
+                "height": 0.0,
+            }
+
+        x_map, y_map, w_map, h_map, area = self._region_stats[label]
+        if w_map <= 1 or h_map <= 1:
+            return {
+                "available": False,
+                "x": 0.0,
+                "y": 0.0,
+                "width": 0.0,
+                "height": 0.0,
+            }
+
+        # Avoid selecting the giant outside region when edges do not bound
+        # an interior container around the pointer.
+        if area >= int(map_w * map_h * 0.98):
+            return {
+                "available": False,
+                "x": 0.0,
+                "y": 0.0,
+                "width": 0.0,
+                "height": 0.0,
+            }
+
+        return {
+            "available": True,
+            "x": float(x_map) / self._dpr_x,
+            "y": float(y_map) / self._dpr_y,
+            "width": float(w_map) / self._dpr_x,
+            "height": float(h_map) / self._dpr_y,
+        }
+
     def _recompute_edge_map(self) -> None:
         try:
             self._edge_map = compute_edge_map(
@@ -680,6 +801,7 @@ class RulerBackend(QObject):
                 self._threshold_low,
                 self._threshold_high,
             )
+            self._recompute_regions()
             source = _create_debug_edge_overlay_source(self._edge_map)
             if source:
                 self._overlay_version += 1
