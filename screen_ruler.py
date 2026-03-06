@@ -35,7 +35,7 @@ except ImportError:
     sys.exit(1)
 
 from PyQt6.QtGui import QGuiApplication, QCursor, QImage
-from PyQt6.QtCore import Qt, QTimer, QRect, QObject, pyqtSignal, pyqtProperty
+from PyQt6.QtCore import Qt, QTimer, QRect, QUrl, QObject, pyqtSignal, pyqtProperty
 from PyQt6.QtQml import QQmlApplicationEngine
 
 # ---------------------------------------------------------------------------
@@ -423,7 +423,7 @@ def main() -> None:
 
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("ruler", ruler)
-    engine.load(_find_qml())
+    engine.load(QUrl.fromLocalFile(_find_qml()))
 
     if not engine.rootObjects():
         print("Error: failed to load QML UI", file=sys.stderr)
