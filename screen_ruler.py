@@ -606,6 +606,73 @@ class RulerBackend(QObject):
         self.controlsChanged.emit()
         self._recompute_timer.start(SENSITIVITY_RECOMPUTE_DEBOUNCE_MS)
 
+    @pyqtSlot(float, float, float, result="QVariant")
+    def snapPointToNearestEdge(
+        self,
+        local_x: float,
+        local_y: float,
+        max_distance_px: float = 5.0,
+    ) -> dict[str, float | bool]:
+        """Snap a local point to nearby horizontal/vertical edge lines.
+
+        The search is line-oriented: X snapping looks for edge presence in
+        nearby columns around the current row band, and Y snapping looks for
+        edge presence in nearby rows around the current column band.
+        Parameters are in QML-local pixels (not edge-map/device pixels).
+        """
+        map_h, map_w = self._edge_map.shape
+        x = float(local_x)
+        y = float(local_y)
+        max_dist = max(0.0, float(max_distance_px))
+        if max_dist <= 0.0:
+            return {"x": x, "y": y, "snapped": False}
+
+        ex = max(0, min(int(round(x * self._dpr_x)), map_w - 1))
+        ey = max(0, min(int(round(y * self._dpr_y)), map_h - 1))
+
+        search_rx = max(1, int(np.ceil(max_dist * self._dpr_x)))
+        search_ry = max(1, int(np.ceil(max_dist * self._dpr_y)))
+        min_x = max(0, ex - search_rx)
+        max_x = min(map_w - 1, ex + search_rx)
+        min_y = max(0, ey - search_ry)
+        max_y = min(map_h - 1, ey + search_ry)
+
+        # Search along the local row/column (with a tiny orthogonal band) so
+        # snapping behaves like "snap to nearby vertical/horizontal line".
+        # This is more stable near corners than selecting x/y from arbitrary
+        # edge pixels in a 2-D window.
+        band_y = max(1, int(np.ceil(self._dpr_y)))
+        band_x = max(1, int(np.ceil(self._dpr_x)))
+        row_min = max(0, ey - band_y)
+        row_max = min(map_h - 1, ey + band_y)
+        col_min = max(0, ex - band_x)
+        col_max = min(map_w - 1, ex + band_x)
+
+        best_x_delta = None
+        best_x_map = None
+        for mx in range(min_x, max_x + 1):
+            if not np.any(self._edge_map[row_min:row_max + 1, mx]):
+                continue
+            delta = abs(mx - ex)
+            if best_x_delta is None or delta < best_x_delta:
+                best_x_delta = delta
+                best_x_map = mx
+
+        best_y_delta = None
+        best_y_map = None
+        for my in range(min_y, max_y + 1):
+            if not np.any(self._edge_map[my, col_min:col_max + 1]):
+                continue
+            delta = abs(my - ey)
+            if best_y_delta is None or delta < best_y_delta:
+                best_y_delta = delta
+                best_y_map = my
+
+        snapped_x = x if best_x_map is None else (best_x_map / self._dpr_x)
+        snapped_y = y if best_y_map is None else (best_y_map / self._dpr_y)
+        snapped = best_x_map is not None or best_y_map is not None
+        return {"x": snapped_x, "y": snapped_y, "snapped": snapped}
+
     def _recompute_edge_map(self) -> None:
         try:
             self._edge_map = compute_edge_map(
@@ -667,16 +734,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--threshold-low",
         type=int,
-        default=50,
+        default=29,
         metavar="N",
-        help="Lower Canny edge-detection threshold (default: 50)",
+        help="Lower Canny edge-detection threshold (default: 29)",
     )
     parser.add_argument(
         "--threshold-high",
         type=int,
-        default=150,
+        default=101,
         metavar="N",
-        help="Upper Canny edge-detection threshold (default: 150)",
+        help="Upper Canny edge-detection threshold (default: 101)",
     )
     parser.add_argument(
         "--debug-edge-overlay",

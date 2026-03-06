@@ -12,6 +12,7 @@ import pytest
 # Import only the pure-logic symbols; avoid triggering any Qt initialisation.
 from screen_ruler import trace_ray, compute_edge_map, _capture_screen_external
 from screen_ruler import _edge_map_to_qimage
+from screen_ruler import RulerBackend
 
 
 # ---------------------------------------------------------------------------
@@ -287,3 +288,74 @@ class TestDebugEdgeOverlay:
 
         image = _capture_screen_external(QRect(0, 0, 50, 50))
         assert image.isNull()
+
+
+class TestSnapPointToNearestEdge:
+    """Tests for line/corner snapping in RulerBackend."""
+
+    def _backend(self, edge_map: np.ndarray) -> RulerBackend:
+        from PyQt6.QtGui import QImage
+
+        h, w = edge_map.shape
+        source_image = QImage(1, 1, QImage.Format.Format_RGB32)
+        return RulerBackend(
+            edge_map=edge_map,
+            dpr_x=1.0,
+            dpr_y=1.0,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=w,
+            virtual_h=h,
+            source_image=source_image,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+    def test_corner_point_snaps_both_axes(self):
+        """A nearby corner pixel should snap both x and y coordinates."""
+        edge_map = np.zeros((12, 12), dtype=bool)
+        edge_map[4, 6] = True
+        backend = self._backend(edge_map)
+
+        result = backend.snapPointToNearestEdge(5.2, 5.2, 2.0)
+
+        assert result["snapped"] is True
+        assert result["x"] == 6.0
+        assert result["y"] == 4.0
+
+    def test_horizontal_edge_snaps_y_coordinate(self):
+        """A horizontal edge near the cursor should pull y to that edge."""
+        edge_map = np.zeros((12, 12), dtype=bool)
+        edge_map[4, :] = True
+        backend = self._backend(edge_map)
+
+        result = backend.snapPointToNearestEdge(6.0, 5.2, 2.0)
+
+        assert result["snapped"] is True
+        assert result["x"] == 6.0
+        assert result["y"] == 4.0
+
+    def test_vertical_edge_snaps_x_coordinate(self):
+        """A vertical edge near the cursor should pull x to that edge."""
+        edge_map = np.zeros((12, 12), dtype=bool)
+        edge_map[:, 7] = True
+        backend = self._backend(edge_map)
+
+        result = backend.snapPointToNearestEdge(5.2, 6.0, 2.0)
+
+        assert result["snapped"] is True
+        assert result["x"] == 7.0
+        assert result["y"] == 6.0
+
+    def test_no_edge_within_radius_returns_original_point(self):
+        """If no edge is close enough, the point should remain unchanged."""
+        edge_map = np.zeros((12, 12), dtype=bool)
+        edge_map[10, 10] = True
+        backend = self._backend(edge_map)
+
+        result = backend.snapPointToNearestEdge(2.0, 2.0, 1.0)
+
+        assert result["snapped"] is False
+        assert result["x"] == 2.0
+        assert result["y"] == 2.0

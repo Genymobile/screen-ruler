@@ -17,28 +17,154 @@ Window {
     id: root
     property var backend: (typeof ruler !== "undefined" ? ruler : null)
     property bool hasBackend: backend !== null
+    readonly property int modeDynamicEdge: 0
+    readonly property int modeRectDrag: 1
+    readonly property int modeContainerTrace: 2
+    property int activeMode: modeDynamicEdge
+    property real pointerX: 0
+    property real pointerY: 0
+    property real snappedPointerX: 0
+    property real snappedPointerY: 0
+    property bool snappedPointerIsSnapped: false
+    property bool rectDragActive: false
+    property bool rectHasSelection: false
+    property real rectStartX: 0
+    property real rectStartY: 0
+    property real rectEndX: 0
+    property real rectEndY: 0
+
+    readonly property real rectLeft: Math.min(rectStartX, rectEndX)
+    readonly property real rectTop: Math.min(rectStartY, rectEndY)
+    readonly property real rectWidth: Math.abs(rectEndX - rectStartX)
+    readonly property real rectHeight: Math.abs(rectEndY - rectStartY)
+    property real rectSnapDistance: 10
+    readonly property int rectSnapMin: 0
+    readonly property int rectSnapMax: 30
+    readonly property int rectSnapStep: 1
+
+    function setActiveMode(mode) {
+        var clamped = Math.max(modeDynamicEdge, Math.min(modeContainerTrace, mode))
+        if (activeMode === clamped)
+            return
+        activeMode = clamped
+        if (activeMode !== modeRectDrag) {
+            rectDragActive = false
+            rectHasSelection = false
+            snappedPointerIsSnapped = false
+        } else {
+            refreshSnappedPointer()
+        }
+    }
+
+    function updatePointer(mouse) {
+        pointerX = mouse.x
+        pointerY = mouse.y
+        if (activeMode === modeRectDrag)
+            refreshSnappedPointer()
+    }
+
+    function refreshSnappedPointer() {
+        if (activeMode !== modeRectDrag) {
+            snappedPointerX = pointerX
+            snappedPointerY = pointerY
+            snappedPointerIsSnapped = false
+            return
+        }
+        var p = maybeSnapPoint(pointerX, pointerY)
+        snappedPointerX = p.x
+        snappedPointerY = p.y
+        snappedPointerIsSnapped = p.snapped === true
+    }
+
+    function maybeSnapPoint(x, y) {
+        if (!hasBackend)
+            return { x: x, y: y, snapped: false }
+
+        var snapped = backend.snapPointToNearestEdge(x, y, rectSnapDistance)
+        if (snapped && snapped.snapped)
+            return { x: snapped.x, y: snapped.y, snapped: true }
+        return { x: x, y: y, snapped: false }
+    }
+
+    function beginRectDrag() {
+        rectDragActive = true
+        rectHasSelection = true
+        rectStartX = snappedPointerX
+        rectStartY = snappedPointerY
+        rectEndX = snappedPointerX
+        rectEndY = snappedPointerY
+    }
+
+    function updateRectDrag() {
+        if (!rectDragActive)
+            return
+        rectEndX = snappedPointerX
+        rectEndY = snappedPointerY
+    }
+
+    function endRectDrag() {
+        if (!rectDragActive)
+            return
+        rectEndX = snappedPointerX
+        rectEndY = snappedPointerY
+        rectDragActive = false
+    }
 
     function clampSensitivity(value) {
         return Math.max(sensitivityMin, Math.min(sensitivityMax, value))
     }
 
-    function adjustSensitivityByWheel(wheelDeltaY) {
+    function clampRectSnapDistance(value) {
+        return Math.max(rectSnapMin, Math.min(rectSnapMax, value))
+    }
+
+    function applySensitivityValue(value) {
+        if (!hasBackend)
+            return
+        edgePreviewOpacity = edgePreviewPeakOpacity
+        backend.setSensitivity(clampSensitivity(value))
+        refreshSnappedPointer()
+    }
+
+    function applySnapDistanceValue(value) {
+        rectSnapDistance = clampRectSnapDistance(value)
+        refreshSnappedPointer()
+    }
+
+    function adjustSensitivityByWheelSteps(notchSteps) {
+        var nextSensitivity = sensitivitySlider.value + notchSteps * sensitivityStep
+        nextSensitivity = Math.max(sensitivityMin, Math.min(sensitivityMax, nextSensitivity))
+        if (nextSensitivity === sensitivitySlider.value)
+            return
+        sensitivitySlider.value = nextSensitivity
+        applySensitivityValue(nextSensitivity)
+    }
+
+    function adjustSnapDistanceByWheelSteps(notchSteps) {
+        var nextSnap = snapDistanceSlider.value + notchSteps * rectSnapStep
+        nextSnap = Math.max(rectSnapMin, Math.min(rectSnapMax, nextSnap))
+        if (nextSnap === snapDistanceSlider.value)
+            return
+        snapDistanceSlider.value = nextSnap
+        applySnapDistanceValue(nextSnap)
+    }
+
+    function adjustActiveModeSliderByWheel(wheelDeltaY) {
         if (!hasBackend || wheelDeltaY === 0)
+            return
+        if (activeMode !== modeDynamicEdge && activeMode !== modeRectDrag)
             return
 
         var notchSteps = wheelDeltaY / 120
         if (notchSteps === 0)
             notchSteps = wheelDeltaY > 0 ? 1 : -1
 
-        var nextValue = clampSensitivity(
-            sensitivitySlider.value + notchSteps * sensitivityStep
-        )
-        if (nextValue === sensitivitySlider.value)
+        if (activeMode === modeRectDrag) {
+            adjustSnapDistanceByWheelSteps(notchSteps)
             return
+        }
 
-        edgePreviewOpacity = edgePreviewPeakOpacity
-        sensitivitySlider.value = nextValue
-        backend.setSensitivity(nextValue)
+        adjustSensitivityByWheelSteps(notchSteps)
     }
 
     readonly property color crosshairColor: "#00DCFF"
@@ -70,7 +196,7 @@ Window {
 
     readonly property int controlsTopMargin: uiBaseMargin
     readonly property int controlsPanelWidth: 380
-    readonly property int controlsPanelHeight: 56
+    readonly property int controlsPanelHeight: root.activeMode === modeRectDrag ? 136 : 104
     readonly property int controlsPanelRadius: uiCornerRadius
     readonly property int controlsPanelZ: 30
     readonly property color controlsPanelColor: uiPanelBackgroundColor
@@ -80,11 +206,19 @@ Window {
     readonly property color controlsTextColor: uiPrimaryTextColor
     readonly property int controlsTitlePointSize: 11
     readonly property int controlsValuePointSize: 10
+    readonly property int modeButtonSize: 30
+    readonly property int modeButtonRadius: 4
+    readonly property color modeButtonBorderColor: Qt.rgba(0.52, 0.56, 0.61, 0.5)
+    readonly property color modeButtonActiveBorderColor: crosshairColor
+    readonly property color modeButtonBgColor: Qt.rgba(0.26, 0.28, 0.31, 0.7)
+    readonly property color modeButtonActiveBgColor: Qt.rgba(0.0, 0.86, 1.0, 0.18)
+    readonly property int controlsColumnSpacing: 8
+    readonly property int modeRowSpacing: 8
     readonly property int sensitivityMin: 0
     readonly property int sensitivityMax: 100
     readonly property int sensitivityStep: 1
     readonly property int sensitivitySliderWidth: 240
-    readonly property int sensitivityDefaultValue: 50
+    readonly property int sensitivityDefaultValue: 85
 
     readonly property int screenshotZ: -2
     readonly property int edgeOverlayZ: -1
@@ -126,9 +260,40 @@ Window {
         MouseArea {
             anchors.fill: parent
             enabled: hasBackend
-            onClicked: backend.copySizeToClipboardAndQuit()
+            hoverEnabled: true
+
+            onPressed: (mouse) => {
+                root.updatePointer(mouse)
+                if (root.activeMode === modeRectDrag && mouse.button === Qt.LeftButton) {
+                    root.beginRectDrag()
+                    mouse.accepted = true
+                }
+            }
+
+            onPositionChanged: (mouse) => {
+                root.updatePointer(mouse)
+                if (root.activeMode === modeRectDrag)
+                    root.updateRectDrag()
+            }
+
+            onReleased: (mouse) => {
+                root.updatePointer(mouse)
+                if (root.activeMode === modeRectDrag && mouse.button === Qt.LeftButton) {
+                    root.endRectDrag()
+                    mouse.accepted = true
+                }
+            }
+
+            onClicked: (mouse) => {
+                if (root.activeMode === modeDynamicEdge) {
+                    backend.copySizeToClipboardAndQuit()
+                    return
+                }
+                mouse.accepted = true
+            }
+
             onWheel: (wheel) => {
-                root.adjustSensitivityByWheel(wheel.angleDelta.y)
+                root.adjustActiveModeSliderByWheel(wheel.angleDelta.y)
                 wheel.accepted = true
             }
         }
@@ -151,40 +316,184 @@ Window {
             onClicked: (mouse) => mouse.accepted = true
         }
 
-        Row {
+        Column {
             anchors.fill: parent
+            anchors.topMargin: 8
+            anchors.bottomMargin: 8
             anchors.leftMargin: controlsSideMargin
             anchors.rightMargin: controlsSideMargin
-            spacing: controlsRowSpacing
+            spacing: controlsColumnSpacing
 
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Sensitivity"
-                color: controlsTextColor
-                font.pointSize: controlsTitlePointSize
-                font.bold: true
-            }
+            Row {
+                spacing: modeRowSpacing
+                anchors.horizontalCenter: parent.horizontalCenter
 
-            Slider {
-                id: sensitivitySlider
-                anchors.verticalCenter: parent.verticalCenter
-                from: sensitivityMin
-                to: sensitivityMax
-                stepSize: sensitivityStep
-                width: sensitivitySliderWidth
-                enabled: hasBackend
-                value: hasBackend ? backend.sensitivity : sensitivityDefaultValue
-                onMoved: {
-                    edgePreviewOpacity = edgePreviewPeakOpacity
-                    if (hasBackend) backend.setSensitivity(value)
+                Repeater {
+                    model: 3
+
+                    Button {
+                        id: modeButton
+                        width: modeButtonSize
+                        height: modeButtonSize
+                        enabled: index !== modeContainerTrace
+                        checkable: true
+                        checked: root.activeMode === index
+                        focusPolicy: Qt.StrongFocus
+
+                        onClicked: root.setActiveMode(index)
+
+                        background: Rectangle {
+                            radius: modeButtonRadius
+                            color: parent.checked ? modeButtonActiveBgColor : modeButtonBgColor
+                            border.width: 1
+                            border.color: parent.checked ? modeButtonActiveBorderColor : modeButtonBorderColor
+                        }
+
+                        contentItem: Canvas {
+                            anchors.fill: parent
+                            opacity: index === modeContainerTrace ? 0.5 : 1
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.clearRect(0, 0, width, height)
+                                var iconColor = parent.checked ? modeButtonActiveBorderColor : controlsTextColor
+
+                                ctx.strokeStyle = iconColor
+                                ctx.fillStyle = iconColor
+                                ctx.lineWidth = 1.5
+
+                                if (index === modeDynamicEdge) {
+                                    var cx = width / 2
+                                    var cy = height / 2
+                                    var ray = 9
+                                    var cap = 3
+                                    ctx.beginPath()
+                                    ctx.moveTo(cx - ray, cy)
+                                    ctx.lineTo(cx + ray, cy)
+                                    ctx.moveTo(cx, cy - ray)
+                                    ctx.lineTo(cx, cy + ray)
+
+                                    // End-caps (same idea as the main crosshair)
+                                    // West / East tips: vertical caps
+                                    ctx.moveTo(cx - ray, cy - cap)
+                                    ctx.lineTo(cx - ray, cy + cap)
+                                    ctx.moveTo(cx + ray, cy - cap)
+                                    ctx.lineTo(cx + ray, cy + cap)
+                                    // North / South tips: horizontal caps
+                                    ctx.moveTo(cx - cap, cy - ray)
+                                    ctx.lineTo(cx + cap, cy - ray)
+                                    ctx.moveTo(cx - cap, cy + ray)
+                                    ctx.lineTo(cx + cap, cy + ray)
+                                    ctx.stroke()
+                                } else if (index === modeRectDrag) {
+                                    var margin = 7
+                                    ctx.strokeRect(margin, margin, width - 2 * margin, height - 2 * margin)
+                                    var cornerX = width - margin
+                                    var cornerY = height - margin
+                                    var cornerSize = 3
+                                    ctx.beginPath()
+                                    ctx.moveTo(cornerX - cornerSize, cornerY)
+                                    ctx.lineTo(cornerX + cornerSize, cornerY)
+                                    ctx.moveTo(cornerX, cornerY - cornerSize)
+                                    ctx.lineTo(cornerX, cornerY + cornerSize)
+                                    ctx.stroke()
+
+                                } else {
+                                    ctx.beginPath()
+                                    ctx.strokeRect(5, 5, width - 10, height - 10)
+                                    ctx.strokeRect(9, 9, width - 18, height - 18)
+                                    ctx.moveTo(width - 7, 5)
+                                    ctx.lineTo(width - 5, 7)
+                                    ctx.lineTo(width - 7, 9)
+                                    ctx.closePath()
+                                    ctx.stroke()
+                                }
+                            }
+
+                            Connections {
+                                target: modeButton
+                                function onCheckedChanged() { modeButton.contentItem.requestPaint() }
+                            }
+                        }
+
+                        ToolTip.visible: hovered
+                        ToolTip.text: index === modeDynamicEdge
+                                      ? "Dynamic edge detection"
+                                      : (index === modeRectDrag
+                                         ? "Click-and-drag rectangle"
+                                         : "Experimental container trace (coming soon)")
+                    }
                 }
             }
 
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: Math.round(sensitivitySlider.value)
-                color: controlsTextColor
-                font.pointSize: controlsValuePointSize
+            Row {
+                spacing: controlsRowSpacing
+                anchors.horizontalCenter: parent.horizontalCenter
+                opacity: root.activeMode === modeContainerTrace ? 0.6 : 1.0
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Sensitivity"
+                    color: controlsTextColor
+                    font.pointSize: controlsTitlePointSize
+                    font.bold: true
+                }
+
+                Slider {
+                    id: sensitivitySlider
+                    anchors.verticalCenter: parent.verticalCenter
+                    from: sensitivityMin
+                    to: sensitivityMax
+                    stepSize: sensitivityStep
+                    width: sensitivitySliderWidth
+                    enabled: hasBackend && root.activeMode !== modeContainerTrace
+                    value: hasBackend ? backend.sensitivity : sensitivityDefaultValue
+                    onMoved: {
+                        root.applySensitivityValue(value)
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Math.round(sensitivitySlider.value)
+                    color: controlsTextColor
+                    font.pointSize: controlsValuePointSize
+                }
+            }
+
+            Row {
+                spacing: controlsRowSpacing
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: root.activeMode === modeRectDrag
+                opacity: root.activeMode === modeRectDrag ? 1.0 : 0.6
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Snap (px)"
+                    color: controlsTextColor
+                    font.pointSize: controlsTitlePointSize
+                    font.bold: true
+                }
+
+                Slider {
+                    id: snapDistanceSlider
+                    anchors.verticalCenter: parent.verticalCenter
+                    from: rectSnapMin
+                    to: rectSnapMax
+                    stepSize: rectSnapStep
+                    width: sensitivitySliderWidth
+                    enabled: hasBackend && root.activeMode === modeRectDrag
+                    value: rectSnapDistance
+                    onMoved: {
+                        root.applySnapDistanceValue(value)
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Math.round(snapDistanceSlider.value)
+                    color: controlsTextColor
+                    font.pointSize: controlsValuePointSize
+                }
             }
         }
 
@@ -194,6 +503,18 @@ Window {
                 if (!sensitivitySlider.pressed) {
                     sensitivitySlider.value = backend.sensitivity
                 }
+                root.refreshSnappedPointer()
+            }
+        }
+
+        Connections {
+            target: root
+            function onActiveModeChanged() {
+                if (!sensitivitySlider.pressed && hasBackend)
+                    sensitivitySlider.value = backend.sensitivity
+                if (!snapDistanceSlider.pressed)
+                    snapDistanceSlider.value = root.rectSnapDistance
+                root.refreshSnappedPointer()
             }
         }
     }
@@ -260,6 +581,7 @@ Window {
     Canvas {
         id: canvas
         anchors.fill: parent
+        visible: root.activeMode === modeDynamicEdge
 
         // Re-request a paint pass whenever the ruler backend emits dataChanged
         Connections {
@@ -304,6 +626,57 @@ Window {
         }
     }
 
+    Rectangle {
+        id: dragSelectionRect
+
+        x: root.rectLeft
+        y: root.rectTop
+        width: root.rectWidth
+        height: root.rectHeight
+        visible: root.activeMode === modeRectDrag && root.rectHasSelection
+        color: "transparent"
+        border.width: 1
+        border.color: crosshairColor
+        z: 1
+    }
+
+    Canvas {
+        id: snappedPointerMarker
+
+        x: root.snappedPointerX - 5
+        y: root.snappedPointerY - 5
+        width: 10
+        height: 10
+        visible: root.activeMode === modeRectDrag && hasBackend
+        z: 2
+
+        Connections {
+            target: root
+            function onSnappedPointerXChanged() { snappedPointerMarker.requestPaint() }
+            function onSnappedPointerYChanged() { snappedPointerMarker.requestPaint() }
+            function onSnappedPointerIsSnappedChanged() { snappedPointerMarker.requestPaint() }
+            function onActiveModeChanged() { snappedPointerMarker.requestPaint() }
+        }
+
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+
+            var color = root.snappedPointerIsSnapped ? crosshairColor : controlsTextColor
+            ctx.strokeStyle = color
+            ctx.lineWidth = 1
+
+            var cx = 5
+            var cy = 5
+            ctx.beginPath()
+            ctx.moveTo(cx - 5, cy)
+            ctx.lineTo(cx + 5, cy)
+            ctx.moveTo(cx, cy - 5)
+            ctx.lineTo(cx, cy + 5)
+            ctx.stroke()
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Measurement label — semi-transparent box, positioned near cursor
     // -----------------------------------------------------------------------
@@ -323,23 +696,31 @@ Window {
     Rectangle {
         id: labelBox
 
-        x:       (hasBackend ? backend.cursorX : -labelOffsetX) + labelOffsetX
-        y:       (hasBackend ? backend.cursorY : -labelOffsetY) + labelOffsetY
+        x:       root.activeMode === modeRectDrag
+                 ? root.rectLeft + labelOffsetX
+                 : (hasBackend ? backend.cursorX : -labelOffsetX) + labelOffsetX
+        y:       root.activeMode === modeRectDrag
+                 ? root.rectTop + labelOffsetY
+                 : (hasBackend ? backend.cursorY : -labelOffsetY) + labelOffsetY
         width:   sizeText.implicitWidth + labelHorizontalPadding
         height:  sizeText.implicitHeight + labelVerticalPadding
         color:   labelBackgroundColor
         opacity: labelOpacity
         radius:  labelRadius
-        visible: hasBackend && backend.cursorX >= 0
+        visible: root.activeMode === modeRectDrag
+                 ? root.rectHasSelection
+                 : (hasBackend && backend.cursorX >= 0)
         z:       2
 
         Text {
             id: sizeText
             anchors.centerIn: parent
-            text:             (hasBackend ? backend.widthPx : 0)
-                             + " × "
-                             + (hasBackend ? backend.heightPx : 0)
-                             + " px"
+            text:             root.activeMode === modeRectDrag
+                             ? (Math.round(root.rectWidth) + " × " + Math.round(root.rectHeight) + " px")
+                             : ((hasBackend ? backend.widthPx : 0)
+                                + " × "
+                                + (hasBackend ? backend.heightPx : 0)
+                                + " px")
             color:            labelTextColor
             font.family:      "DejaVu Sans Mono, Consolas, monospace"
             font.pointSize:   13
