@@ -47,6 +47,21 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N]
 
 ---
 
+## Build a standalone executable
+
+If you don't want to install a Python environment, you can build a single self-contained binary with [PyInstaller](https://pyinstaller.org):
+
+```bash
+pip install -r requirements.txt -r requirements-build.txt
+pyinstaller screen_ruler.spec
+```
+
+The binary is written to `dist/screen-ruler`. Copy it anywhere and run it directly — no Python or library installation needed on the target machine.
+
+> **Note:** the executable bundles all dependencies and is therefore ~100 MB. This is expected for an application that ships PyQt5, NumPy, and OpenCV.
+
+---
+
 ## Contributing
 
 1. Install the dev dependencies (same as the runtime ones, plus `pytest`):
