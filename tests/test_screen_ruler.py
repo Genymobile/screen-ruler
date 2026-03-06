@@ -1,0 +1,190 @@
+"""
+Unit tests for the pure-logic components of screen_ruler.py.
+
+These tests do NOT require a display or a running QApplication — they only
+exercise the module-level helper functions ``trace_ray`` and
+``compute_edge_map`` which have no Qt dependencies at runtime.
+"""
+
+import numpy as np
+import pytest
+
+# Import only the pure-logic symbols; avoid triggering any Qt initialisation.
+from screen_ruler import trace_ray, compute_edge_map
+
+
+# ---------------------------------------------------------------------------
+# trace_ray
+# ---------------------------------------------------------------------------
+
+
+class TestTraceRay:
+    """Tests for the ray-tracing helper."""
+
+    def _empty(self, h: int = 20, w: int = 20) -> np.ndarray:
+        """Return an all-False edge map of the given size."""
+        return np.zeros((h, w), dtype=bool)
+
+    def _with_edge_at(self, row: int, col: int, h: int = 20, w: int = 20) -> np.ndarray:
+        em = self._empty(h, w)
+        em[row, col] = True
+        return em
+
+    # -- boundary behaviour --------------------------------------------------
+
+    def test_empty_map_east_reaches_boundary(self):
+        """With no edges the ray must travel to the map boundary."""
+        em = self._empty(10, 10)
+        # Starting at column 0, heading east (+x) → 9 steps to column 9
+        assert trace_ray(em, 0, 5, 1, 0) == 9
+
+    def test_empty_map_west_reaches_boundary(self):
+        em = self._empty(10, 10)
+        assert trace_ray(em, 9, 5, -1, 0) == 9
+
+    def test_empty_map_north_reaches_boundary(self):
+        em = self._empty(10, 10)
+        assert trace_ray(em, 5, 9, 0, -1) == 9
+
+    def test_empty_map_south_reaches_boundary(self):
+        em = self._empty(10, 10)
+        assert trace_ray(em, 5, 0, 0, 1) == 9
+
+    def test_start_on_boundary_returns_zero(self):
+        """A ray fired from the map boundary should immediately return 0."""
+        em = self._empty(10, 10)
+        assert trace_ray(em, 9, 5, 1, 0) == 0   # eastern edge, heading east
+
+    # -- edge detection ------------------------------------------------------
+
+    def test_ray_stops_at_edge_pixel(self):
+        """Ray must stop (and include) the first edge pixel it encounters."""
+        em = self._with_edge_at(row=5, col=7)
+        # Start at (0, 5) heading east — edge is at col 7, distance = 7
+        assert trace_ray(em, 0, 5, 1, 0) == 7
+
+    def test_ray_stops_at_nearest_edge(self):
+        """When multiple edges exist the ray must stop at the closest one."""
+        em = self._empty()
+        em[5, 4] = True
+        em[5, 10] = True
+        # From (0, 5) heading east, nearest edge is at col 4
+        assert trace_ray(em, 0, 5, 1, 0) == 4
+
+    def test_ray_one_step_from_edge(self):
+        em = self._with_edge_at(row=5, col=1)
+        assert trace_ray(em, 0, 5, 1, 0) == 1
+
+    def test_edge_at_starting_column_not_detected(self):
+        """
+        The algorithm starts by examining the *next* pixel, not the starting
+        pixel itself.  An edge at the start should be ignored and the ray
+        should continue until it finds another edge or hits the boundary.
+        """
+        em = self._empty(10, 10)
+        em[5, 0] = True   # edge at start column
+        # No other edges east → ray travels to the boundary (9 steps)
+        assert trace_ray(em, 0, 5, 1, 0) == 9
+
+    # -- diagonal / combined directions (sanity) -----------------------------
+
+    def test_stationary_ray_returns_zero(self):
+        """dx=dy=0 would loop forever; direction (0,0) is not a valid input
+        but the function should not be called that way.  Instead we verify
+        that a boundary is still reached for valid directions."""
+        em = self._empty(5, 5)
+        # Just pick cardinal directions and confirm non-negative results
+        for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+            result = trace_ray(em, 2, 2, dx, dy)
+            assert result >= 0
+
+    # -- measurement correctness ---------------------------------------------
+
+    def test_W_equals_sum_of_east_west_rays(self):
+        """W should equal d_west + d_east measured from the same starting point."""
+        em = self._empty(10, 20)
+        em[5, 3] = True   # west boundary: 6 columns away from col 9
+        em[5, 14] = True  # east boundary: 5 columns away from col 9
+        d_w = trace_ray(em, 9, 5, -1, 0)
+        d_e = trace_ray(em, 9, 5, 1, 0)
+        assert d_w == 6
+        assert d_e == 5
+        assert d_w + d_e == 11
+
+    def test_H_equals_sum_of_north_south_rays(self):
+        em = self._empty(20, 10)
+        em[3, 5] = True   # north boundary: row 3, from row 9 → distance 6
+        em[15, 5] = True  # south boundary: row 15, from row 9 → distance 6
+        d_n = trace_ray(em, 5, 9, 0, -1)
+        d_s = trace_ray(em, 5, 9, 0, 1)
+        assert d_n == 6
+        assert d_s == 6
+        assert d_n + d_s == 12
+
+
+# ---------------------------------------------------------------------------
+# compute_edge_map
+# ---------------------------------------------------------------------------
+
+
+class TestComputeEdgeMap:
+    """Tests for the Canny-based edge-map builder."""
+
+    def _make_qimage(self, width: int, height: int, rgb: tuple) -> "QImage":
+        from PyQt5.QtGui import QImage
+        img = QImage(width, height, QImage.Format_RGB888)
+        img.fill(0)
+        from PyQt5.QtGui import QColor
+        color = QColor(*rgb)
+        for y in range(height):
+            for x in range(width):
+                img.setPixelColor(x, y, color)
+        return img
+
+    def test_solid_colour_produces_no_edges(self):
+        """A uniformly coloured image should yield no edges at all."""
+        from PyQt5.QtGui import QImage
+        img = self._make_qimage(50, 50, (128, 64, 200))
+        edge_map = compute_edge_map(img)
+        assert edge_map.dtype == bool
+        assert edge_map.shape == (50, 50)
+        assert not edge_map.any(), "Solid image must have zero edge pixels"
+
+    def test_output_shape_matches_input(self):
+        """Edge map must have the same spatial dimensions as the source image."""
+        from PyQt5.QtGui import QImage
+        img = self._make_qimage(80, 60, (0, 0, 0))
+        edge_map = compute_edge_map(img)
+        assert edge_map.shape == (60, 80)
+
+    def test_hard_edge_is_detected(self):
+        """
+        A half-black / half-white image has a crisp horizontal edge.
+        The edge map must contain some True pixels along that boundary.
+        """
+        from PyQt5.QtGui import QImage, QColor
+        w, h = 100, 100
+        img = QImage(w, h, QImage.Format_RGB888)
+        img.fill(0)
+        white = QColor(255, 255, 255)
+        for y in range(h):
+            for x in range(w):
+                if x >= w // 2:
+                    img.setPixelColor(x, y, white)
+        edge_map = compute_edge_map(img, threshold_low=30, threshold_high=80)
+        assert edge_map.any(), "Hard vertical edge must be detected"
+
+    def test_returns_bool_array(self):
+        """Return type must always be a boolean numpy array."""
+        from PyQt5.QtGui import QImage
+        img = self._make_qimage(10, 10, (100, 100, 100))
+        edge_map = compute_edge_map(img)
+        assert edge_map.dtype == bool
+
+    def test_custom_thresholds_accepted(self):
+        """Function must not raise when non-default thresholds are supplied."""
+        from PyQt5.QtGui import QImage
+        img = self._make_qimage(20, 20, (0, 0, 0))
+        # Should not raise
+        edge_map = compute_edge_map(img, threshold_low=10, threshold_high=200)
+        assert edge_map.shape == (20, 20)
