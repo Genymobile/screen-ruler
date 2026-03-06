@@ -38,7 +38,7 @@ except ImportError:
     )
     sys.exit(1)
 
-from PyQt6.QtGui import QGuiApplication, QCursor, QImage
+from PyQt6.QtGui import QGuiApplication, QCursor, QImage, QClipboard
 from PyQt6.QtCore import (
     Qt,
     QTimer,
@@ -48,6 +48,7 @@ from PyQt6.QtCore import (
     QEventLoop,
     pyqtSignal,
     pyqtProperty,
+    pyqtSlot,
 )
 from PyQt6.QtQml import QQmlApplicationEngine
 
@@ -546,6 +547,34 @@ class RulerBackend(QObject):
         self._H = self._d_n + self._d_s
 
         self.dataChanged.emit()
+
+    @pyqtSlot()
+    def copySizeToClipboardAndQuit(self) -> None:
+        self.poll()
+        text = f"{self._W} × {self._H}"
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text, QClipboard.Mode.Clipboard)
+            try:
+                clipboard.setText(text, QClipboard.Mode.Selection)
+            except Exception:
+                pass
+
+        if (
+            os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
+            and shutil.which("wl-copy")
+        ):
+            try:
+                subprocess.run(
+                    ["wl-copy"],
+                    input=text.encode("utf-8"),
+                    check=True,
+                    timeout=1,
+                )
+            except Exception:
+                pass
+
+        QTimer.singleShot(120, QGuiApplication.quit)
 
 
 # ---------------------------------------------------------------------------

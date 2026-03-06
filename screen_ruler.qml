@@ -62,6 +62,12 @@ Window {
         Keys.onPressed: (event) => {
             if (event.key === Qt.Key_Q) Qt.quit()
         }
+
+        MouseArea {
+            anchors.fill: parent
+            enabled: hasBackend
+            onClicked: backend.copySizeToClipboardAndQuit()
+        }
     }
 
     // -----------------------------------------------------------------------
