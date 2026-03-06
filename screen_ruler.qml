@@ -72,6 +72,23 @@ Window {
             // Horizontal ray: west tip → cursor → east tip
             ctx.moveTo(ruler.westEnd,  ruler.cursorY)
             ctx.lineTo(ruler.eastEnd,  ruler.cursorY)
+
+            // Perpendicular end-caps — small tick marks at each ray tip
+            // that highlight the measured boundary
+            var t = 5  // half-length of each tick → 10 px total
+            // North tip (horizontal tick)
+            ctx.moveTo(ruler.cursorX - t, ruler.northEnd)
+            ctx.lineTo(ruler.cursorX + t, ruler.northEnd)
+            // South tip (horizontal tick)
+            ctx.moveTo(ruler.cursorX - t, ruler.southEnd)
+            ctx.lineTo(ruler.cursorX + t, ruler.southEnd)
+            // West tip (vertical tick)
+            ctx.moveTo(ruler.westEnd, ruler.cursorY - t)
+            ctx.lineTo(ruler.westEnd, ruler.cursorY + t)
+            // East tip (vertical tick)
+            ctx.moveTo(ruler.eastEnd, ruler.cursorY - t)
+            ctx.lineTo(ruler.eastEnd, ruler.cursorY + t)
+
             ctx.stroke()
         }
     }
