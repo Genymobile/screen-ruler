@@ -63,7 +63,7 @@ TIMER_INTERVAL_MS = 16                  # ≈ 60 FPS
 CAPTURE_SETTLE_MS = 250                 # keep latest frame, then snapshot after settle window
 SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
 REGION_CLOSE_KERNEL_SIZE = 3            # close tiny gaps before connected components
-REGION_DILATE_ITERATIONS = 1            # thicken barriers so small zones stay separated
+REGION_DILATE_ITERATIONS = 0            # keep container bounds closer to raw edges
 
 SENSITIVITY_LOW_AT_100 = 5
 SENSITIVITY_HIGH_AT_100 = 25
