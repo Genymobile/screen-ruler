@@ -10,10 +10,10 @@ from PyQt6.QtCore import QRect, QTimer, QUrl
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
-from screen_ruler_backend import RulerBackend
-from screen_ruler_capture import _capture_tool_hint, capture_screen
-from screen_ruler_core import compute_edge_map
-from screen_ruler_overlay import (
+from .backend import RulerBackend
+from .capture import _capture_tool_hint, capture_screen
+from .core import compute_edge_map
+from .overlay import (
     create_debug_edge_overlay_source,
     create_screenshot_overlay_source,
 )
@@ -64,8 +64,10 @@ def find_qml() -> str:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         base = getattr(sys, "_MEIPASS")
     else:
-        base = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, "screen_ruler.qml")
+        # app.py now lives under ruler/, while QML assets live under qml/
+        # at the repository root.
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "qml", "screen_ruler.qml")
 
 
 def main() -> None:

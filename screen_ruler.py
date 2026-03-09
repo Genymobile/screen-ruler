@@ -13,12 +13,12 @@ from __future__ import annotations
 import shutil as shutil
 import subprocess as subprocess
 
-from screen_ruler_app import find_qml as _find_qml
-from screen_ruler_app import main, parse_args
-from screen_ruler_backend import RulerBackend
-from screen_ruler_capture import _capture_screen_external, _capture_tool_hint, capture_screen
-from screen_ruler_core import compute_edge_map, trace_ray
-from screen_ruler_overlay import (
+from ruler.app import find_qml as _find_qml
+from ruler.app import main, parse_args
+from ruler.backend import RulerBackend
+from ruler.capture import _capture_screen_external, _capture_tool_hint, capture_screen
+from ruler.core import compute_edge_map, trace_ray
+from ruler.overlay import (
     create_debug_edge_overlay_source as _create_debug_edge_overlay_source,
     create_screenshot_overlay_source as _create_screenshot_overlay_source,
     edge_map_to_qimage as _edge_map_to_qimage,

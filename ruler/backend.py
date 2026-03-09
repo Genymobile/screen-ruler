@@ -12,7 +12,7 @@ import numpy as np
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QClipboard, QCursor, QGuiApplication, QImage
 
-from screen_ruler_core import (
+from .core import (
     REGION_CLOSE_KERNEL_SIZE,
     REGION_DILATE_ITERATIONS,
     compute_edge_map,
@@ -20,7 +20,7 @@ from screen_ruler_core import (
     thresholds_to_sensitivity,
     trace_ray,
 )
-from screen_ruler_overlay import create_debug_edge_overlay_source
+from .overlay import create_debug_edge_overlay_source
 
 SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
 
