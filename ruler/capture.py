@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 
 from PyQt6.QtCore import QEventLoop, QRect, QTimer
 from PyQt6.QtGui import QGuiApplication, QImage
+
+from .platform import session_type
 
 CAPTURE_SETTLE_MS = 250
 
@@ -25,8 +26,8 @@ def capture_screen(app: QGuiApplication) -> QImage:
     if all_rect.width() <= 0 or all_rect.height() <= 0:
         return QImage()
 
-    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
-    if session_type == "wayland":
+    current_session = session_type(app)
+    if current_session == "wayland":
         image = _capture_screen_qt_native(app)
         if not image.isNull() and image.width() > 0 and image.height() > 0:
             return image
@@ -109,15 +110,15 @@ def _capture_screen_qt_native(app: QGuiApplication, timeout_ms: int = 12000) -> 
 
 def _capture_screen_external(all_rect: QRect) -> QImage:
     """Try an external screenshot tool based on session type."""
-    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
+    current_session = session_type()
     command = None
 
-    if session_type == "wayland":
+    if current_session == "wayland":
         grim = shutil.which("grim")
         if grim:
             geometry = f"{all_rect.x()},{all_rect.y()} {all_rect.width()}x{all_rect.height()}"
             command = [grim, "-g", geometry, "-t", "png", "-"]
-    elif session_type == "x11":
+    elif current_session == "x11":
         imagemagick_import = shutil.which("import")
         if imagemagick_import:
             command = [imagemagick_import, "-window", "root", "png:-"]
@@ -141,8 +142,8 @@ def _capture_screen_external(all_rect: QRect) -> QImage:
 
 def _capture_tool_hint() -> str | None:
     """Return a user-facing hint about optional external screenshot tools."""
-    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
-    if session_type == "wayland":
+    current_session = session_type()
+    if current_session == "wayland":
         try:
             from PyQt6.QtMultimedia import QMediaCaptureSession, QScreenCapture, QVideoSink
             _ = (QMediaCaptureSession, QScreenCapture, QVideoSink)
@@ -150,6 +151,6 @@ def _capture_tool_hint() -> str | None:
         except Exception:
             if not shutil.which("grim"):
                 return "Tip: install 'grim' to enable Wayland fallback screenshot capture."
-    if session_type == "x11" and not shutil.which("import"):
+    if current_session == "x11" and not shutil.which("import"):
         return "Tip: install ImageMagick ('import') to enable X11 fallback screenshot capture."
     return None

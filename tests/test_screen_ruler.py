@@ -13,6 +13,7 @@ import pytest
 from screen_ruler import trace_ray, compute_edge_map, _capture_screen_external
 from screen_ruler import _edge_map_to_qimage
 from screen_ruler import RulerBackend
+from ruler.platform import is_wayland_session, session_type
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +256,19 @@ class TestExternalCaptureFallback:
 
         image = _capture_screen_external(QRect(0, 0, 50, 50))
         assert image.isNull()
+
+
+class TestPlatformSessionHelper:
+    """Tests for platform/session detection helpers."""
+
+    def test_session_type_reads_environment_when_no_qt_app(self, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        assert session_type() == "wayland"
+
+    def test_is_wayland_session_false_on_x11_environment(self, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        assert is_wayland_session() is False
+        assert session_type() == "x11"
 
 
 class TestDebugEdgeOverlay:

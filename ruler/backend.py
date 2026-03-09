@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 
@@ -21,6 +20,7 @@ from .core import (
     trace_ray,
 )
 from .overlay import create_debug_edge_overlay_source
+from .platform import is_wayland_session
 
 SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
 
@@ -65,7 +65,7 @@ class RulerBackend(QObject):
         self._screenshot_source = screenshot_source
         self._debug_overlay_source = debug_overlay_source
         self._overlay_version = 0
-        self._is_wayland = os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
+        self._is_wayland = is_wayland_session()
         self._cx: int = -1
         self._cy: int = -1
         self._d_n: int = 0
@@ -389,10 +389,7 @@ class RulerBackend(QObject):
             except Exception:
                 pass
 
-        if (
-            os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
-            and shutil.which("wl-copy")
-        ):
+        if self._is_wayland and shutil.which("wl-copy"):
             try:
                 subprocess.run(
                     ["wl-copy"],
