@@ -62,7 +62,6 @@ from PyQt6.QtQml import QQmlApplicationEngine
 TIMER_INTERVAL_MS = 16                  # ≈ 60 FPS
 CAPTURE_SETTLE_MS = 250                 # keep latest frame, then snapshot after settle window
 SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
-CANNY_BLUR_SIGMA = 0.35                 # lower than OpenCV default auto-sigma for sharper edges
 REGION_CLOSE_KERNEL_SIZE = 3            # close tiny gaps before connected components
 REGION_DILATE_ITERATIONS = 1            # thicken barriers so small zones stay separated
 
@@ -118,29 +117,8 @@ def compute_edge_map(
     """
     Convert a ``QImage`` to a boolean edge map using Canny edge detection.
 
-    Why is Gaussian blur applied before ``cv2.Canny``?
-    ---------------------------------------------------
-    Two distinct reasons:
-
-    1. **OpenCV's Canny does not blur internally.**
-       The original 1986 Canny paper specifies Gaussian smoothing as its first
-       step, but OpenCV's ``cv2.Canny`` skips that step and goes straight to
-       the Sobel gradient computation.  Pre-smoothing is left to the caller,
-       which is the standard usage pattern recommended by the OpenCV docs.
-
-    2. **Screen captures are inherently noisy.**
-       A desktop screenshot contains many sources of high-frequency variation
-       that are *not* meaningful UI edges: sub-pixel font anti-aliasing, texture
-       gradients in wallpapers, JPEG/PNG compression ringing, and icon detail.
-       Without the blur, Canny fires on all of these, producing an edge map so
-       dense that every crosshair ray stops within one or two pixels of the
-       cursor — rendering the ruler useless.  Even raising the Canny thresholds
-       cannot fully suppress this noise because the thresholds gate hysteresis
-       propagation, not local gradient spikes caused by individual noisy pixels.
-
-    A small kernel (3×3) is intentionally used so that genuine sharp UI
-    boundaries (button outlines, panel separators) are preserved while
-    single-pixel noise is smoothed away.
+     The current pipeline applies Canny directly to grayscale pixels so subtle
+     UI transitions are preserved as candidate edges.
 
     Parameters
     ----------
@@ -174,10 +152,7 @@ def compute_edge_map(
     img = raw[:, : width * 3].reshape((height, width, 3)).copy()
 
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    # Pre-blur: cv2.Canny has no internal smoothing step, and raw screen
-    # captures contain too much high-frequency noise to use Canny directly.
-    blurred = cv2.GaussianBlur(gray, (3, 3), CANNY_BLUR_SIGMA)
-    edges = cv2.Canny(blurred, threshold_low, threshold_high)
+    edges = cv2.Canny(gray, threshold_low, threshold_high)
     return edges.astype(bool)
 
 
