@@ -12,8 +12,22 @@ a = Analysis(
     ['screen_ruler.py'],
     pathex=[],
     binaries=[],
-    # Bundle the QML file so it is available inside the one-file binary.
-    datas=[('screen_ruler.qml', '.')],
+    # Bundle QML and helper assets used by the root QML file.
+    datas=[
+        ('qmldir', '.'),
+        ('RulerTheme.qml', '.'),
+        ('screen_ruler.qml', '.'),
+        ('OverlayImageLayer.qml', '.'),
+        ('SelectionOutline.qml', '.'),
+        ('GlobalInputLayer.qml', '.'),
+        ('ModeIconButton.qml', '.'),
+        ('ModeSelector.qml', '.'),
+        ('LabeledSliderRow.qml', '.'),
+        ('CrosshairCanvas.qml', '.'),
+        ('SnappedPointerMarker.qml', '.'),
+        ('MeasurementLabel.qml', '.'),
+        ('screen_ruler_format.js', '.'),
+    ],
     # cv2 is imported inside a try/except; declare it explicitly so
     # PyInstaller's static analyser does not miss it.
     # QtQml and QtQuick are used at runtime by QQmlApplicationEngine but
