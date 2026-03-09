@@ -65,6 +65,11 @@ SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
 REGION_CLOSE_KERNEL_SIZE = 3            # close tiny gaps before connected components
 REGION_DILATE_ITERATIONS = 1            # thicken barriers so small zones stay separated
 
+SENSITIVITY_LOW_AT_100 = 5
+SENSITIVITY_HIGH_AT_100 = 25
+SENSITIVITY_LOW_AT_0 = 80
+SENSITIVITY_HIGH_AT_0 = 220
+
 # ---------------------------------------------------------------------------
 # Pure-logic helpers (module-level so they can be unit-tested without a display)
 # ---------------------------------------------------------------------------
@@ -382,8 +387,10 @@ def _create_screenshot_overlay_source(qimage: QImage) -> str | None:
 def _sensitivity_to_thresholds(sensitivity: float) -> tuple[int, int]:
     """Map user-facing sensitivity (0..100) to Canny thresholds."""
     s = max(0.0, min(100.0, sensitivity))
-    low = int(round(20 + (100 - s) * 0.6))
-    high = int(round(80 + (100 - s) * 1.4))
+    low_span = SENSITIVITY_LOW_AT_0 - SENSITIVITY_LOW_AT_100
+    high_span = SENSITIVITY_HIGH_AT_0 - SENSITIVITY_HIGH_AT_100
+    low = int(round(SENSITIVITY_LOW_AT_100 + (100 - s) * (low_span / 100.0)))
+    high = int(round(SENSITIVITY_HIGH_AT_100 + (100 - s) * (high_span / 100.0)))
     if high <= low:
         high = min(255, low + 1)
     return low, high
@@ -391,8 +398,10 @@ def _sensitivity_to_thresholds(sensitivity: float) -> tuple[int, int]:
 
 def _thresholds_to_sensitivity(threshold_low: int, threshold_high: int) -> float:
     """Approximate sensitivity (0..100) from Canny thresholds."""
-    s_from_low = 100.0 - ((threshold_low - 20) / 0.6)
-    s_from_high = 100.0 - ((threshold_high - 80) / 1.4)
+    low_scale = (SENSITIVITY_LOW_AT_0 - SENSITIVITY_LOW_AT_100) / 100.0
+    high_scale = (SENSITIVITY_HIGH_AT_0 - SENSITIVITY_HIGH_AT_100) / 100.0
+    s_from_low = 100.0 - ((threshold_low - SENSITIVITY_LOW_AT_100) / low_scale)
+    s_from_high = 100.0 - ((threshold_high - SENSITIVITY_HIGH_AT_100) / high_scale)
     return max(0.0, min(100.0, (s_from_low + s_from_high) / 2.0))
 
 
@@ -830,16 +839,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--threshold-low",
         type=int,
-        default=29,
+        default=16,
         metavar="N",
-        help="Lower Canny edge-detection threshold (default: 29)",
+        help="Lower Canny edge-detection threshold (default: 16)",
     )
     parser.add_argument(
         "--threshold-high",
         type=int,
-        default=101,
+        default=54,
         metavar="N",
-        help="Upper Canny edge-detection threshold (default: 101)",
+        help="Upper Canny edge-detection threshold (default: 54)",
     )
     parser.add_argument(
         "--debug-edge-overlay",
