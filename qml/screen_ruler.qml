@@ -252,16 +252,22 @@ Window {
     width:  hasBackend && backend.isWaylandSession ? Screen.width : (hasBackend ? backend.virtualDesktopWidth : Screen.width)
     height: hasBackend && backend.isWaylandSession ? Screen.height : (hasBackend ? backend.virtualDesktopHeight : Screen.height)
 
-    // Frameless, always-on-top, transparent overlay
-        flags:  hasBackend && backend.isWaylandSession
+    // Frameless, always-on-top, transparent overlay.
+    // On X11 use bypass hint to avoid WM work-area insets (panels/docks).
+    // Esc/Q reliability is preserved by an app-level key filter in Python.
+    flags:  hasBackend && backend.isWaylandSession
             ? (Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
             : (Qt.WindowStaysOnTopHint
              | Qt.FramelessWindowHint
-             | Qt.Tool
              | Qt.X11BypassWindowManagerHint)
     color:   "transparent"
-        visibility: hasBackend && backend.isWaylandSession ? Window.FullScreen : Window.Windowed
+    visibility: hasBackend && backend.isWaylandSession ? Window.FullScreen : Window.Windowed
     title:   "Screen Ruler"
+
+    Component.onCompleted: {
+        requestActivate()
+        keyInputLayer.forceActiveFocus()
+    }
 
     Shortcut {
         sequence: "Escape"
@@ -271,6 +277,19 @@ Window {
     Shortcut {
         sequence: "Q"
         onActivated: Qt.quit()
+    }
+
+    Item {
+        id: keyInputLayer
+        anchors.fill: parent
+        focus: true
+
+        Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
+                event.accepted = true
+                Qt.quit()
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

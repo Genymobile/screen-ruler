@@ -65,6 +65,22 @@ The binary is written to `dist/screen-ruler`. Copy it anywhere and run it direct
 
 ---
 
+## Troubleshooting
+
+### X11 overlay offset under top/side bars
+
+On some X11 window managers, frameless utility windows are constrained to the desktop work area (excluding panels/docks). screen-ruler uses `Qt.X11BypassWindowManagerHint` on X11 so the overlay matches full virtual-desktop coordinates used for capture and measurement.
+
+Because bypass windows may have less predictable focus behavior, the app also installs an application-level `Escape`/`Q` key fallback.
+
+### `qt.qpa.theme.gnome: dbus reply error ... NoReply`
+
+On some GNOME/X11 systems Qt may print this warning during startup while probing desktop theme services over DBus. In most cases it is harmless and does not affect ruler behavior.
+
+If it appears repeatedly, check that your session DBus and portal services are healthy (`dbus-daemon`, `xdg-desktop-portal`).
+
+---
+
 ## Contributing
 
 1. Install the dev dependencies (same as the runtime ones, plus `pytest`):

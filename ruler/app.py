@@ -6,8 +6,8 @@ import argparse
 import os
 import sys
 
-from PyQt6.QtCore import QRect, QTimer, QUrl
-from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtCore import QEvent, QObject, QRect, QTimer, QUrl, Qt
+from PyQt6.QtGui import QGuiApplication, QKeyEvent
 from PyQt6.QtQml import QQmlApplicationEngine
 
 from .backend import RulerBackend
@@ -19,6 +19,22 @@ from .overlay import (
 )
 
 TIMER_INTERVAL_MS = 16
+
+
+class QuitKeysEventFilter(QObject):
+    """Catch Esc/Q at app level when WM focus is unreliable on X11 overlays."""
+
+    def eventFilter(self, _obj: QObject, event: QEvent) -> bool:
+        if event.type() != QEvent.Type.KeyPress:
+            return False
+        if not isinstance(event, QKeyEvent):
+            return False
+
+        key = event.key()
+        if key in (Qt.Key.Key_Escape, Qt.Key.Key_Q):
+            QGuiApplication.quit()
+            return True
+        return False
 
 
 def parse_args() -> argparse.Namespace:
@@ -83,6 +99,8 @@ def main() -> None:
 
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Screen Ruler")
+    quit_filter = QuitKeysEventFilter(app)
+    app.installEventFilter(quit_filter)
 
     all_rect = QRect()
     for screen in app.screens():
