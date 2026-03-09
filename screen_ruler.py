@@ -894,6 +894,9 @@ def _find_qml() -> str:
 def main() -> None:
     args = parse_args()
 
+    # Keep Qt Quick Controls in sync with the app accent palette.
+    os.environ["QT_QUICK_CONTROLS_UNIVERSAL_ACCENT"] = "#E6195E"
+
     try:
         from PyQt6.QtQuickControls2 import QQuickStyle
         QQuickStyle.setStyle("Universal")

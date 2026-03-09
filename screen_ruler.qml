@@ -203,15 +203,15 @@ Window {
         adjustSensitivityByWheelSteps(notchSteps)
     }
 
-    readonly property color crosshairColor: "#00DCFF"
+    readonly property color crosshairColor: "#E6195E"
     readonly property int crosshairLineWidth: 1
     readonly property int crosshairTickHalfLength: 5
 
     readonly property int uiBaseMargin: 14
     readonly property int uiCornerRadius: 5
-    readonly property color uiPanelBackgroundColor: Qt.rgba(0.16, 0.17, 0.19, 1.0)
+    readonly property color uiPanelBackgroundColor: "#1A1A1A"
     readonly property real uiPanelOpacity: 0.9
-    readonly property color uiPrimaryTextColor: "#D7DADF"
+    readonly property color uiPrimaryTextColor: "#FFFFFF"
 
     readonly property int labelOffsetX: uiBaseMargin
     readonly property int labelOffsetY: 4
@@ -247,7 +247,7 @@ Window {
     readonly property color modeButtonBorderColor: Qt.rgba(0.52, 0.56, 0.61, 0.5)
     readonly property color modeButtonActiveBorderColor: crosshairColor
     readonly property color modeButtonBgColor: Qt.rgba(0.26, 0.28, 0.31, 0.7)
-    readonly property color modeButtonActiveBgColor: Qt.rgba(0.0, 0.86, 1.0, 0.18)
+    readonly property color modeButtonActiveBgColor: Qt.rgba(0.90, 0.10, 0.37, 0.18)
     readonly property int controlsColumnSpacing: 8
     readonly property int modeRowSpacing: 8
     readonly property int sensitivityMin: 0
@@ -432,14 +432,8 @@ Window {
                                     ctx.stroke()
 
                                 } else {
-                                    ctx.beginPath()
                                     ctx.strokeRect(5, 5, width - 10, height - 10)
                                     ctx.strokeRect(9, 9, width - 18, height - 18)
-                                    ctx.moveTo(width - 7, 5)
-                                    ctx.lineTo(width - 5, 7)
-                                    ctx.lineTo(width - 7, 9)
-                                    ctx.closePath()
-                                    ctx.stroke()
                                 }
                             }
 
@@ -451,10 +445,10 @@ Window {
 
                         ToolTip.visible: hovered
                         ToolTip.text: index === modeDynamicEdge
-                                      ? "Dynamic edge detection"
+                                                  ? "Crosshair"
                                       : (index === modeRectDrag
-                                         ? "Click-and-drag rectangle"
-                                         : "Experimental container trace")
+                                                      ? "Drag rectangle"
+                                                      : "Container detection")
 
                     }
                 }
