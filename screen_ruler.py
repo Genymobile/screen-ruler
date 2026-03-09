@@ -812,10 +812,10 @@ class RulerBackend(QObject):
         except Exception:
             pass
 
-    @pyqtSlot()
-    def copySizeToClipboardAndQuit(self) -> None:
-        self._update_measurement(force=True)
-        text = f"{self._W} × {self._H} px"
+    @pyqtSlot(str)
+    def copyTextToClipboardAndQuit(self, text: str) -> None:
+        text = str(text)
+
         clipboard = QGuiApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(text, QClipboard.Mode.Clipboard)
@@ -839,7 +839,6 @@ class RulerBackend(QObject):
                 pass
 
         QTimer.singleShot(120, QGuiApplication.quit)
-
 
 # ---------------------------------------------------------------------------
 # CLI entry point

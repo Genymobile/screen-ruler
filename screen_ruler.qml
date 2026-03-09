@@ -321,11 +321,17 @@ Window {
             }
 
             onClicked: (mouse) => {
-                if (root.activeMode === modeDynamicEdge) {
-                    backend.copySizeToClipboardAndQuit()
+                var canCopy = root.activeMode === modeDynamicEdge
+                              || (root.activeMode === modeContainerTrace && root.containerHasSelection)
+                if (!canCopy) {
+                    mouse.accepted = true
                     return
                 }
-                mouse.accepted = true
+
+                var widthPx = root.activeMode === modeDynamicEdge ? backend.widthPx : root.containerWidth
+                var heightPx = root.activeMode === modeDynamicEdge ? backend.heightPx : root.containerHeight
+                var text = Math.round(widthPx) + " × " + Math.round(heightPx)
+                backend.copyTextToClipboardAndQuit(text)
             }
 
             onWheel: (wheel) => {
