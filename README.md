@@ -85,7 +85,7 @@ If it appears repeatedly, check that your session DBus and portal services are h
 
 1. Install the dev dependencies (same as the runtime ones, plus `pytest`):
    ```bash
-   pip install -r requirements.txt pytest
+   pip install -r requirements-dev.txt
    ```
 2. Run the test suite from the repository root:
    ```bash
