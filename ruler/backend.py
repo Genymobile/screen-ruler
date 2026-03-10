@@ -384,10 +384,8 @@ class RulerBackend(QObject):
         clipboard = QGuiApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(text, QClipboard.Mode.Clipboard)
-            try:
+            if clipboard.supportsSelection():
                 clipboard.setText(text, QClipboard.Mode.Selection)
-            except Exception:
-                pass
 
         if self._is_wayland and shutil.which("wl-copy"):
             try:
