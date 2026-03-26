@@ -1,0 +1,506 @@
+// screen_ruler.qml
+//
+// Transparent full-screen overlay for the screen-ruler tool.
+//
+// Visual elements:
+//   * Canvas  — cyan crosshair lines (N/S/E/W rays)
+//   * Rectangle + Column of Text — semi-transparent W/H label box
+//
+// All data comes from the ``ruler`` context property (RulerBackend QObject)
+// exposed by the Python host via QQmlApplicationEngine.rootContext().
+
+import QtQuick
+import QtQuick.Window
+import QtQuick.Controls
+import "screen_ruler_format.js" as Format
+
+Window {
+    id: root
+    property var backend: (typeof ruler !== "undefined" ? ruler : null)
+    property bool hasBackend: backend !== null
+    readonly property int modeDynamicEdge: 0
+    readonly property int modeRectDrag: 1
+    readonly property int modeContainerTrace: 2
+    property int activeMode: modeDynamicEdge
+    property real pointerX: 0
+    property real pointerY: 0
+    property real snappedPointerX: 0
+    property real snappedPointerY: 0
+    property bool snappedPointerIsSnapped: false
+    property bool rectDragActive: false
+    property bool rectHasSelection: false
+    property real rectStartX: 0
+    property real rectStartY: 0
+    property real rectEndX: 0
+    property real rectEndY: 0
+
+    readonly property real rectLeft: Math.min(rectStartX, rectEndX)
+    readonly property real rectTop: Math.min(rectStartY, rectEndY)
+    readonly property real rectWidth: Math.abs(rectEndX - rectStartX)
+    readonly property real rectHeight: Math.abs(rectEndY - rectStartY)
+    property bool containerHasSelection: false
+    property real containerX: 0
+    property real containerY: 0
+    property real containerWidth: 0
+    property real containerHeight: 0
+    property real rectSnapDistance: 10
+    readonly property int rectSnapMin: 0
+    readonly property int rectSnapMax: 30
+    readonly property int rectSnapStep: 1
+
+    function setActiveMode(mode) {
+        var clamped = Math.max(modeDynamicEdge, Math.min(modeContainerTrace, mode))
+        if (activeMode === clamped)
+            return
+        activeMode = clamped
+        if (activeMode !== modeRectDrag) {
+            rectDragActive = false
+            rectHasSelection = false
+            snappedPointerIsSnapped = false
+        } else {
+            refreshSnappedPointer()
+        }
+        if (activeMode !== modeContainerTrace) {
+            containerHasSelection = false
+        } else {
+            refreshContainerSelection()
+        }
+    }
+
+    function updatePointer(x, y) {
+        pointerX = x
+        pointerY = y
+        if (activeMode === modeRectDrag)
+            refreshSnappedPointer()
+        if (activeMode === modeContainerTrace)
+            refreshContainerSelection()
+    }
+
+    function refreshContainerSelection() {
+        if (!hasBackend || activeMode !== modeContainerTrace) {
+            containerHasSelection = false
+            return
+        }
+
+        var detected = backend.detectContainerAtPoint(pointerX, pointerY)
+        if (!detected || !detected.available) {
+            containerHasSelection = false
+            return
+        }
+
+        containerX = detected.x
+        containerY = detected.y
+        containerWidth = detected.width
+        containerHeight = detected.height
+        containerHasSelection = true
+    }
+
+    function refreshSnappedPointer() {
+        if (activeMode !== modeRectDrag) {
+            snappedPointerX = pointerX
+            snappedPointerY = pointerY
+            snappedPointerIsSnapped = false
+            return
+        }
+        var p = maybeSnapPoint(pointerX, pointerY)
+        snappedPointerX = p.x
+        snappedPointerY = p.y
+        snappedPointerIsSnapped = p.snapped === true
+    }
+
+    function maybeSnapPoint(x, y) {
+        if (!hasBackend)
+            return { x: x, y: y, snapped: false }
+
+        var snapped = backend.snapPointToNearestEdge(x, y, rectSnapDistance)
+        if (snapped && snapped.snapped)
+            return { x: snapped.x, y: snapped.y, snapped: true }
+        return { x: x, y: y, snapped: false }
+    }
+
+    function beginRectDrag() {
+        rectDragActive = true
+        rectHasSelection = true
+        rectStartX = snappedPointerX
+        rectStartY = snappedPointerY
+        rectEndX = snappedPointerX
+        rectEndY = snappedPointerY
+    }
+
+    function updateRectDrag() {
+        if (!rectDragActive)
+            return
+        rectEndX = snappedPointerX
+        rectEndY = snappedPointerY
+    }
+
+    function endRectDrag() {
+        if (!rectDragActive)
+            return
+        rectEndX = snappedPointerX
+        rectEndY = snappedPointerY
+        rectDragActive = false
+    }
+
+    function clampSensitivity(value) {
+        return Math.max(sensitivityMin, Math.min(sensitivityMax, value))
+    }
+
+    function clampRectSnapDistance(value) {
+        return Math.max(rectSnapMin, Math.min(rectSnapMax, value))
+    }
+
+    function applySensitivityValue(value) {
+        if (!hasBackend)
+            return
+        edgePreviewOpacity = edgePreviewPeakOpacity
+        backend.setSensitivity(clampSensitivity(value))
+        refreshSnappedPointer()
+        refreshContainerSelection()
+    }
+
+    function applySnapDistanceValue(value) {
+        rectSnapDistance = clampRectSnapDistance(value)
+        refreshSnappedPointer()
+    }
+
+    function adjustSensitivityByWheelSteps(notchSteps) {
+        var nextSensitivity = sensitivityRow.sliderValue + notchSteps * sensitivityStep
+        nextSensitivity = Math.max(sensitivityMin, Math.min(sensitivityMax, nextSensitivity))
+        if (nextSensitivity === sensitivityRow.sliderValue)
+            return
+        sensitivityRow.sliderValue = nextSensitivity
+        applySensitivityValue(nextSensitivity)
+    }
+
+    function adjustSnapDistanceByWheelSteps(notchSteps) {
+        var nextSnap = snapRow.sliderValue + notchSteps * rectSnapStep
+        nextSnap = Math.max(rectSnapMin, Math.min(rectSnapMax, nextSnap))
+        if (nextSnap === snapRow.sliderValue)
+            return
+        snapRow.sliderValue = nextSnap
+        applySnapDistanceValue(nextSnap)
+    }
+
+    function adjustActiveModeSliderByWheel(wheelDeltaY) {
+        if (!hasBackend || wheelDeltaY === 0)
+            return
+        if (
+            activeMode !== modeDynamicEdge
+            && activeMode !== modeRectDrag
+            && activeMode !== modeContainerTrace
+        )
+            return
+
+        var notchSteps = wheelDeltaY / 120
+        if (notchSteps === 0)
+            notchSteps = wheelDeltaY > 0 ? 1 : -1
+
+        if (activeMode === modeRectDrag) {
+            adjustSnapDistanceByWheelSteps(notchSteps)
+            return
+        }
+
+        adjustSensitivityByWheelSteps(notchSteps)
+    }
+
+    function canCopyCurrentMeasurement() {
+        return activeMode === modeDynamicEdge
+               || (activeMode === modeContainerTrace && containerHasSelection)
+    }
+
+    function activeMeasurementText(includeUnit) {
+        if (activeMode === modeRectDrag)
+            return Format.roundedPair(rectWidth, rectHeight, includeUnit)
+        if (activeMode === modeContainerTrace)
+            return Format.roundedPair(containerWidth, containerHeight, includeUnit)
+        var widthPx = hasBackend ? backend.widthPx : 0
+        var heightPx = hasBackend ? backend.heightPx : 0
+        return Format.roundedPair(widthPx, heightPx, includeUnit)
+    }
+
+     readonly property real labelX: activeMode === modeRectDrag
+                                            ? rectLeft + RulerTheme.baseMargin
+                                            : (activeMode === modeContainerTrace
+                                                ? containerX + RulerTheme.baseMargin
+                                                : (hasBackend ? backend.cursorX : -RulerTheme.baseMargin) + RulerTheme.baseMargin)
+     readonly property real labelY: activeMode === modeRectDrag
+                                            ? rectTop + RulerTheme.labelOffsetY
+                                            : (activeMode === modeContainerTrace
+                                                ? containerY + RulerTheme.labelOffsetY
+                                                : (hasBackend ? backend.cursorY : -RulerTheme.labelOffsetY) + RulerTheme.labelOffsetY)
+     readonly property bool labelVisible: activeMode === modeRectDrag
+                                                  ? rectHasSelection
+                                                  : (activeMode === modeContainerTrace
+                                                      ? containerHasSelection
+                                                      : (hasBackend && backend.cursorX >= 0))
+
+    readonly property int edgePreviewHoldMs: 1000
+    readonly property int edgePreviewFadeMs: 1000
+    readonly property real edgePreviewPeakOpacity: 0.5
+    property real edgePreviewOpacity: 0.0
+
+    readonly property int sensitivityMin: 0
+    readonly property int sensitivityMax: 100
+    readonly property int sensitivityStep: 1
+    readonly property int sensitivityDefaultValue: RulerTheme.sensitivityDefaultValue
+
+    // Position and size are driven by the virtual desktop bounds that Python
+    // computed from the union of all screen geometries.
+    x:      hasBackend && backend.isWaylandSession ? 0 : (hasBackend ? backend.virtualDesktopX : 0)
+    y:      hasBackend && backend.isWaylandSession ? 0 : (hasBackend ? backend.virtualDesktopY : 0)
+    width:  hasBackend && backend.isWaylandSession ? Screen.width : (hasBackend ? backend.virtualDesktopWidth : Screen.width)
+    height: hasBackend && backend.isWaylandSession ? Screen.height : (hasBackend ? backend.virtualDesktopHeight : Screen.height)
+
+    // Frameless, always-on-top, transparent overlay.
+    // On X11 use bypass hint to avoid WM work-area insets (panels/docks).
+    // Esc/Q reliability is preserved by an app-level key filter in Python.
+    flags:  hasBackend && backend.isWaylandSession
+            ? (Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+            : (Qt.WindowStaysOnTopHint
+             | Qt.FramelessWindowHint
+             | Qt.X11BypassWindowManagerHint)
+    color:   "transparent"
+    visibility: hasBackend && backend.isWaylandSession ? Window.FullScreen : Window.Windowed
+    title:   "Screen Ruler"
+
+    Component.onCompleted: {
+        requestActivate()
+        keyInputLayer.forceActiveFocus()
+    }
+
+    Shortcut {
+        sequence: "Escape"
+        onActivated: Qt.quit()
+    }
+
+    Shortcut {
+        sequence: "Q"
+        onActivated: Qt.quit()
+    }
+
+    Item {
+        id: keyInputLayer
+        anchors.fill: parent
+        focus: true
+
+        Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
+                event.accepted = true
+                Qt.quit()
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Keyboard handling — Escape or Q exits the application
+    // -----------------------------------------------------------------------
+    GlobalInputLayer {
+        enabled: hasBackend
+        activeMode: root.activeMode
+        modeRectDrag: root.modeRectDrag
+        canCopy: root.canCopyCurrentMeasurement()
+
+        onPointerPressed: (x, y, button) => {
+            root.updatePointer(x, y)
+            if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
+                root.beginRectDrag()
+        }
+
+        onPointerMoved: (x, y) => {
+            root.updatePointer(x, y)
+            if (root.activeMode === modeRectDrag)
+                root.updateRectDrag()
+        }
+
+        onPointerReleased: (x, y, button) => {
+            root.updatePointer(x, y)
+            if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
+                root.endRectDrag()
+        }
+
+        onCopyRequested: {
+            backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
+        }
+
+        onWheelAdjusted: (deltaY) => {
+            root.adjustActiveModeSliderByWheel(deltaY)
+        }
+    }
+
+    Rectangle {
+        id: controlsPanel
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: RulerTheme.baseMargin
+        width: RulerTheme.controlsPanelWidth
+        height: root.activeMode === modeRectDrag ? 136 : 104
+        radius: RulerTheme.cornerRadius
+        color: RulerTheme.panelBackgroundColor
+        opacity: RulerTheme.panelOpacity
+        z: 30
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: (mouse) => mouse.accepted = true
+        }
+
+        Column {
+            anchors.fill: parent
+            anchors.topMargin: 8
+            anchors.bottomMargin: 8
+            anchors.leftMargin: RulerTheme.baseMargin
+            anchors.rightMargin: RulerTheme.baseMargin
+            spacing: RulerTheme.controlsColumnSpacing
+
+            ModeSelector {
+                activeMode: root.activeMode
+                anchors.horizontalCenter: parent.horizontalCenter
+                onModeSelected: (mode) => root.setActiveMode(mode)
+            }
+
+            LabeledSliderRow {
+                id: sensitivityRow
+                anchors.horizontalCenter: parent.horizontalCenter
+                label: "Sensitivity"
+                fromValue: sensitivityMin
+                toValue: sensitivityMax
+                stepValue: sensitivityStep
+                sliderEnabled: hasBackend
+                sliderValue: hasBackend ? backend.sensitivity : sensitivityDefaultValue
+                onMoved: (value) => root.applySensitivityValue(value)
+            }
+
+            LabeledSliderRow {
+                id: snapRow
+                anchors.horizontalCenter: parent.horizontalCenter
+                label: "Snap (px)"
+                fromValue: rectSnapMin
+                toValue: rectSnapMax
+                stepValue: rectSnapStep
+                sliderEnabled: hasBackend && root.activeMode === modeRectDrag
+                visible: root.activeMode === modeRectDrag
+                sliderValue: rectSnapDistance
+                onMoved: (value) => root.applySnapDistanceValue(value)
+            }
+        }
+
+        Connections {
+            target: hasBackend ? backend : null
+            function onControlsChanged() {
+                if (!sensitivityRow.sliderPressed) {
+                    sensitivityRow.sliderValue = backend.sensitivity
+                }
+                root.refreshSnappedPointer()
+                root.refreshContainerSelection()
+            }
+        }
+
+        Connections {
+            target: root
+            function onActiveModeChanged() {
+                if (!sensitivityRow.sliderPressed && hasBackend)
+                    sensitivityRow.sliderValue = backend.sensitivity
+                if (!snapRow.sliderPressed)
+                    snapRow.sliderValue = root.rectSnapDistance
+                root.refreshSnappedPointer()
+                root.refreshContainerSelection()
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Captured screenshot background (always shown)
+    // -----------------------------------------------------------------------
+    OverlayImageLayer {
+        visible: hasBackend && backend.screenshotAvailable
+        source: hasBackend ? backend.screenshotSource : ""
+        opacity: 1.0
+        z: -2
+    }
+
+    // -----------------------------------------------------------------------
+    // Optional debug overlay — displays the captured Canny edge map
+    // -----------------------------------------------------------------------
+    OverlayImageLayer {
+         visible: hasBackend
+               && backend.debugOverlaySource !== ""
+               && (backend.debugOverlayEnabled || edgePreviewOpacity > 0)
+        source: hasBackend ? backend.debugOverlaySource : ""
+        opacity: hasBackend && backend.debugOverlayEnabled
+                 ? Math.max(RulerTheme.debugOverlayOpacity, edgePreviewOpacity)
+                 : edgePreviewOpacity
+        z: -1
+    }
+
+    Connections {
+        target: hasBackend ? backend : null
+        function onEdgeMapPreviewRequested() {
+            edgePreviewAnimation.restart()
+        }
+    }
+
+    SequentialAnimation {
+        id: edgePreviewAnimation
+        PropertyAction {
+            target: root
+            property: "edgePreviewOpacity"
+            value: edgePreviewPeakOpacity
+        }
+        PauseAnimation {
+            duration: edgePreviewHoldMs
+        }
+        NumberAnimation {
+            target: root
+            property: "edgePreviewOpacity"
+            to: 0
+            duration: edgePreviewFadeMs
+            easing.type: Easing.OutQuad
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Crosshair canvas — repainted on every cursor move
+    // -----------------------------------------------------------------------
+    CrosshairCanvas {
+        visible: root.activeMode === modeDynamicEdge
+        backend: root.backend
+    }
+
+    SelectionOutline {
+        id: dragSelectionRect
+        x: root.rectLeft
+        y: root.rectTop
+        width: root.rectWidth
+        height: root.rectHeight
+        visible: root.activeMode === modeRectDrag && root.rectHasSelection
+        z: 1
+    }
+
+    SelectionOutline {
+        id: containerSelectionRect
+        x: root.containerX
+        y: root.containerY
+        width: root.containerWidth
+        height: root.containerHeight
+        visible: root.activeMode === modeContainerTrace && root.containerHasSelection
+        z: 1
+    }
+
+    SnappedPointerMarker {
+        markerX: root.snappedPointerX
+        markerY: root.snappedPointerY
+        visible: root.activeMode === modeRectDrag && hasBackend
+        isSnapped: root.snappedPointerIsSnapped
+    }
+
+    // -----------------------------------------------------------------------
+    // Measurement label — semi-transparent box, positioned near cursor
+    // -----------------------------------------------------------------------
+    MeasurementLabel {
+        labelX: root.labelX
+        labelY: root.labelY
+        visible: root.labelVisible
+        textValue: root.activeMeasurementText(true)
+    }
+}

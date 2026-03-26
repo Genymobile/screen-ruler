@@ -1,0 +1,5 @@
+# Build-only dependency — not required to run screen-ruler.
+# Used to create a self-contained executable:
+#   pip install -r requirements-build.txt
+#   pyinstaller screen_ruler.spec
+pyinstaller>=5.0
