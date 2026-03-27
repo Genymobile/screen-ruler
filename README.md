@@ -4,13 +4,9 @@ A smart, edge-detection-based screen ruler for Linux desktops.
 
 Move your mouse cursor over any UI element and instantly read the **width** and **height** of the space between the nearest edges — buttons, panels, windows, icons — with no clicking or dragging required.
 
----
-
 ## How it works
 
 At launch, screen-ruler captures a one-time screenshot and builds a binary edge map using Canny edge detection (with an OpenCV Gaussian pre-blur to suppress font anti-aliasing and wallpaper noise). A transparent overlay is then shown over all monitors. Each frame, four rays are cast North / South / East / West from the mouse cursor until they hit an edge pixel or the screen boundary. The total East+West distance is reported as **W** and North+South as **H**, live in a small label next to the cursor.
-
----
 
 ## Dependencies
 
@@ -25,8 +21,6 @@ Install all dependencies at once:
 ```bash
 pip install -r requirements.txt
 ```
-
----
 
 ## Usage
 
@@ -48,8 +42,6 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 | Left click | Copy current measurement as `W × H px` to clipboard, then quit |
 | Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
 
----
-
 ## Build a standalone executable
 
 If you don't want to install a Python environment, you can build a single self-contained binary with [PyInstaller](https://pyinstaller.org):
@@ -62,8 +54,6 @@ pyinstaller screen_ruler.spec
 The binary is written to `dist/screen-ruler`. Copy it anywhere and run it directly — no Python or library installation needed on the target machine.
 
 > **Note:** the executable bundles all dependencies and is therefore ~100 MB. This is expected for an application that ships PyQt6, NumPy, and OpenCV.
-
----
 
 ## Troubleshooting
 
@@ -79,8 +69,6 @@ On some GNOME/X11 systems Qt may print this warning during startup while probing
 
 If it appears repeatedly, check that your session DBus and portal services are healthy (`dbus-daemon`, `xdg-desktop-portal`).
 
----
-
 ## Contributing
 
 1. Install the dev dependencies (same as the runtime ones, plus `pytest`):
@@ -93,3 +81,7 @@ If it appears repeatedly, check that your session DBus and portal services are h
    ```
 3. The pure-logic helpers (`trace_ray`, `compute_edge_map`) are module-level functions specifically so they can be tested without a display. Keep new logic in the same style when possible.
 4. The QML overlay (`screen_ruler.qml`) and screen-capture code require a running Qt application and are not covered by the unit tests.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
