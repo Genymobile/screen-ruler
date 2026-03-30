@@ -81,6 +81,17 @@ After building the binary, run the install script:
 
 The script copies the binary and creates an Automator Quick Action ("Launch Screen Ruler"). Then bind a shortcut (e.g. **⌘⇧R**) in **System Settings → Keyboard → Keyboard Shortcuts → Services**.
 
+### Windows
+
+After building the executable, run the install script in PowerShell:
+
+```powershell
+.\install-windows.ps1                                          # installs to the current directory
+.\install-windows.ps1 -InstallDir "$env:LOCALAPPDATA\screen-ruler"  # or specify a directory
+```
+
+The script copies the binary, adds it to the user `PATH`, and creates a Start Menu shortcut with a **Ctrl+Shift+R** hotkey.
+
 ---
 
 For manual setup on any platform, see [docs/manual-shortcut-setup.md](docs/manual-shortcut-setup.md).

@@ -88,3 +88,29 @@ Any launcher or shortcut manager that can run an arbitrary command will work. Po
 ### Option 3: Third-party tools
 
 Apps like [Raycast](https://www.raycast.com/), [Alfred](https://www.alfredapp.com/), or [Hammerspoon](https://www.hammerspoon.org/) can bind a global hotkey to run an arbitrary command. Point it at the `screen-ruler` binary.
+
+## Windows
+
+### Option 1: Start Menu shortcut hotkey
+
+1. Place `screen-ruler.exe` in a permanent directory.
+2. Create a shortcut (`.lnk`) to it in the **Start Menu** folder:
+   - Press `Win+R`, type `shell:programs`, and press Enter.
+   - Right-click → **New → Shortcut**, point it at `screen-ruler.exe`.
+3. Right-click the shortcut → **Properties** → **Shortcut key**, press your preferred combo (e.g. **Ctrl+Shift+R**) → **OK**.
+
+> The hotkey only works while the `.lnk` remains in the Start Menu or Desktop folder.
+
+### Option 2: PowerToys
+
+[PowerToys Keyboard Manager](https://learn.microsoft.com/en-us/windows/powertoys/keyboard-manager) can remap a key combination to launch an application. Add a shortcut that runs `screen-ruler.exe`.
+
+### Option 3: AutoHotkey
+
+Create an `.ahk` script:
+
+```ahk
+^+r::Run "C:\path\to\screen-ruler.exe"
+```
+
+This binds **Ctrl+Shift+R** to launch screen-ruler.
