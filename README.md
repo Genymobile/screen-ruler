@@ -55,9 +55,11 @@ The binary is written to `dist/screen-ruler`. Copy it anywhere and run it direct
 
 > **Note:** the executable bundles all dependencies and is therefore ~100 MB. This is expected for an application that ships PyQt6, NumPy, and OpenCV.
 
-## Global keyboard shortcut (Linux)
+## Global keyboard shortcut
 
 Screen Ruler is designed to be ephemeral — capture, measure, quit. A global keyboard shortcut lets you summon it instantly without a persistent daemon.
+
+### Linux
 
 After building the binary, run the install script:
 
@@ -68,7 +70,20 @@ After building the binary, run the install script:
 
 The script copies the binary, installs a `.desktop` entry, and automatically registers a **Super+Shift+R** shortcut for the detected desktop environment (GNOME, KDE Plasma, Hyprland, Sway).
 
-If you use a different DE or prefer manual setup, see [docs/manual-shortcut-setup.md](docs/manual-shortcut-setup.md).
+### macOS
+
+After building the binary, run the install script:
+
+```bash
+./install-macos.sh            # installs to the current directory
+./install-macos.sh -d ~/bin   # or specify a directory
+```
+
+The script copies the binary and creates an Automator Quick Action ("Launch Screen Ruler"). Then bind a shortcut (e.g. **⌘⇧R**) in **System Settings → Keyboard → Keyboard Shortcuts → Services**.
+
+---
+
+For manual setup on any platform, see [docs/manual-shortcut-setup.md](docs/manual-shortcut-setup.md).
 
 
 ## Troubleshooting
