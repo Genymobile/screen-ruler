@@ -38,6 +38,11 @@ gsettings set "$SCHEMA.custom-keybinding:$SLOT" command 'screen-ruler'
 gsettings set "$SCHEMA.custom-keybinding:$SLOT" binding '<Super><Shift>r'
 ```
 
+> If `screen-ruler` is not on your `PATH`, use the full path instead. Wrap it in double-quotes so GNOME handles spaces correctly:
+> ```bash
+> gsettings set "$SCHEMA.custom-keybinding:$SLOT" command '"/full/path/to/screen-ruler"'
+> ```
+
 ### KDE Plasma
 
 **System Settings → Shortcuts → Custom Shortcuts → Edit → New → Global Shortcut → Command/URL**, set the command to `screen-ruler`, and press your preferred key combination.
