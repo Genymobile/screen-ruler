@@ -27,11 +27,12 @@ SCHEMA=org.gnome.settings-daemon.plugins.media-keys
 SLOT=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/
 
 CURRENT="$(gsettings get "$SCHEMA" custom-keybindings)"
-NEW_LIST="$([ "$CURRENT" = "@as []" ] \
-  && echo "['$SLOT']" \
-  || echo "${CURRENT/%]/, '$SLOT']}")"
-
-gsettings set "$SCHEMA" custom-keybindings "$NEW_LIST"
+if ! echo "$CURRENT" | grep -qF "$SLOT"; then
+  NEW_LIST="$([ "$CURRENT" = "@as []" ] \
+    && echo "['$SLOT']" \
+    || echo "${CURRENT/%]/, '$SLOT']}")"
+  gsettings set "$SCHEMA" custom-keybindings "$NEW_LIST"
+fi
 gsettings set "$SCHEMA.custom-keybinding:$SLOT" name    'Screen Ruler'
 gsettings set "$SCHEMA.custom-keybinding:$SLOT" command 'screen-ruler'
 gsettings set "$SCHEMA.custom-keybinding:$SLOT" binding '<Super><Shift>r'

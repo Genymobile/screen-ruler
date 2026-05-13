@@ -243,7 +243,8 @@ install_hyprland_shortcut() {
 
     printf '\n%s\nbind = $mainMod SHIFT, R, exec, "%s"\n%s\n' \
         "$begin_marker" "$EXEC_PATH" "$end_marker" >> "$tmp"
-    mv "$tmp" "$config"
+    # Write back to the original path so symlinks and file permissions are preserved.
+    cat "$tmp" > "$config" && rm -f "$tmp"
 
     echo "Added Hyprland binding to $config → $SHORTCUT_DISPLAY"
     echo "Backup saved at $backup"
@@ -281,7 +282,8 @@ install_sway_shortcut() {
     # shellcheck disable=SC2016
     printf '\n%s\nbindsym $mod+Shift+r exec "%s"\n%s\n' \
         "$begin_marker" "$EXEC_PATH" "$end_marker" >> "$tmp"
-    mv "$tmp" "$config"
+    # Write back to the original path so symlinks and file permissions are preserved.
+    cat "$tmp" > "$config" && rm -f "$tmp"
 
     echo "Added Sway binding to $config → $SHORTCUT_DISPLAY"
     echo "Backup saved at $backup"
