@@ -226,6 +226,10 @@ install_hyprland_shortcut() {
 
     # Already has a marked block — check if it's already up-to-date, else update it.
     if grep -qF "$begin_marker" "$config"; then
+        if ! grep -qF "$end_marker" "$config"; then
+            echo "Hyprland: malformed Screen Ruler block in $config (missing END marker); skipping."
+            return 1
+        fi
         local block
         block="$(awk -v b="$begin_marker" -v e="$end_marker" \
             '$0==b{f=1;next} $0==e{f=0;next} f{print}' "$config")"
@@ -272,6 +276,10 @@ install_sway_shortcut() {
     fi
 
     if grep -qF "$begin_marker" "$config"; then
+        if ! grep -qF "$end_marker" "$config"; then
+            echo "Sway: malformed Screen Ruler block in $config (missing END marker); skipping."
+            return 1
+        fi
         local block
         block="$(awk -v b="$begin_marker" -v e="$end_marker" \
             '$0==b{f=1;next} $0==e{f=0;next} f{print}' "$config")"
