@@ -108,7 +108,8 @@ EOF
 
 echo "Installed desktop entry → $DESKTOP_FILE"
 
-# Refresh the application database so the entry appears in launchers.
+# Update the MIME-type database (not required for launcher visibility, but
+# harmless and expected by some desktop environments).
 if command -v update-desktop-database &>/dev/null; then
     update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 fi
@@ -147,8 +148,9 @@ install_gnome_shortcut() {
     done
 
     # Find the next unused slot index.
+    # Use a leading slash in the pattern so "custom1/" never matches "custom10/".
     local idx=0
-    while echo "$current" | grep -q "custom${idx}/"; do
+    while echo "$current" | grep -qF "/custom${idx}/"; do
         idx=$((idx + 1))
     done
     local new_slot="$path_prefix/custom${idx}/"
@@ -232,7 +234,7 @@ install_hyprland_shortcut() {
             return
         fi
         # Block exists but points to a different path — update it below.
-    elif grep -q "screen-ruler" "$config"; then
+    elif grep -qE "exec,\s*\"?[^ ]*screen-ruler" "$config"; then
         echo "Hyprland: screen-ruler binding already present in $config"
         return
     fi
@@ -277,7 +279,7 @@ install_sway_shortcut() {
             echo "Sway: shortcut already up to date in $config"
             return
         fi
-    elif grep -q "screen-ruler" "$config"; then
+    elif grep -qE "exec\s+\"?[^ ]*screen-ruler" "$config"; then
         echo "Sway: screen-ruler binding already present in $config"
         return
     fi
