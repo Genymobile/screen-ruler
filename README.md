@@ -55,6 +55,48 @@ The binary is written to `dist/screen-ruler`. Copy it anywhere and run it direct
 
 > **Note:** the executable bundles all dependencies and is therefore ~100 MB. This is expected for an application that ships PyQt6, NumPy, and OpenCV.
 
+## Global keyboard shortcut
+
+Screen Ruler is designed to be ephemeral — capture, measure, quit. A global keyboard shortcut lets you summon it instantly without a persistent daemon.
+
+### Linux
+
+After building the binary, run the install script:
+
+```bash
+./install-linux.sh            # installs to the current directory
+./install-linux.sh -d ~/bin   # or specify a directory
+```
+
+The script copies the binary, installs a `.desktop` entry, and automatically registers a **Super+Shift+R** shortcut for the detected desktop environment (GNOME, KDE Plasma, Hyprland, Sway).
+
+### macOS
+
+After building the binary, run the install script:
+
+```bash
+./install-macos.sh            # installs to the current directory
+./install-macos.sh -d ~/bin   # or specify a directory
+```
+
+The script copies the binary and creates an Automator Quick Action ("Launch Screen Ruler"). Then bind a shortcut (e.g. **⌘⇧R**) in **System Settings → Keyboard → Keyboard Shortcuts → Services**.
+
+### Windows
+
+After building the executable, run the install script in PowerShell:
+
+```powershell
+.\install-windows.ps1                                          # installs to the current directory
+.\install-windows.ps1 -InstallDir "$env:LOCALAPPDATA\screen-ruler"  # or specify a directory
+```
+
+The script copies the binary, adds it to the user `PATH`, and creates a Start Menu shortcut with a **Ctrl+Shift+R** hotkey.
+
+---
+
+For manual setup on any platform, see [docs/manual-shortcut-setup.md](docs/manual-shortcut-setup.md).
+
+
 ## Troubleshooting
 
 ### X11 overlay offset under top/side bars
@@ -68,6 +110,7 @@ Because bypass windows may have less predictable focus behavior, the app also in
 On some GNOME/X11 systems Qt may print this warning during startup while probing desktop theme services over DBus. In most cases it is harmless and does not affect ruler behavior.
 
 If it appears repeatedly, check that your session DBus and portal services are healthy (`dbus-daemon`, `xdg-desktop-portal`).
+
 
 ## Contributing
 
