@@ -16,21 +16,31 @@ Open **Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts**, clic
 | Command | `screen-ruler` |
 | Shortcut | e.g. `Super+Shift+R` |
 
-Or via the command line:
+Or via the command line (safe append — preserves any existing custom shortcuts):
 
 ```bash
-# Pick an unused slot (custom0, custom1, …)
-SLOT=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/
+SCHEMA=org.gnome.settings-daemon.plugins.media-keys
+PREFIX=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings
 
-gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \
-  "['$SLOT']"
+# Choose an unused slot index (increment if custom0 is already taken)
+SLOT="$PREFIX/custom0/"
 
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$SLOT \
-  name 'Screen Ruler'
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$SLOT \
-  command 'screen-ruler'
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$SLOT \
-  binding '<Super><Shift>r'
+# Read the current list and append the new slot only if not already present
+CURRENT="$(gsettings get "$SCHEMA" custom-keybindings)"
+if echo "$CURRENT" | grep -qF "$SLOT"; then
+  echo "Slot already registered"
+else
+  if [ "$CURRENT" = "@as []" ]; then
+    NEW_LIST="['$SLOT']"
+  else
+    NEW_LIST="$(echo "$CURRENT" | sed "s|]$|, '$SLOT']|")"
+  fi
+  gsettings set "$SCHEMA" custom-keybindings "$NEW_LIST"
+fi
+
+gsettings set "$SCHEMA.custom-keybinding:$SLOT" name 'Screen Ruler'
+gsettings set "$SCHEMA.custom-keybinding:$SLOT" command 'screen-ruler'
+gsettings set "$SCHEMA.custom-keybinding:$SLOT" binding '<Super><Shift>r'
 ```
 
 ### KDE Plasma

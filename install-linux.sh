@@ -199,7 +199,7 @@ install_kde_shortcut() {
     elif command -v kbuildsycoca5 &>/dev/null; then kbuildsycoca5 2>/dev/null
     fi
 
-    echo "Registered KDE Plasma shortcut → $SHORTCUT_DISPLAY"
+    echo "Registered KDE Plasma shortcut → Meta+Shift+R"
     echo "You may need to log out and back in (or run kquitapp5 kglobalaccel && kstart5 kglobalaccel) for the shortcut to activate."
 }
 
