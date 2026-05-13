@@ -80,7 +80,7 @@ if (-not $hasInstallDir) {
     if ([string]::IsNullOrEmpty($userPath)) {
         $newPath = $InstallDir
     } else {
-        $newPath = "$userPath;$InstallDir"
+        $newPath = $userPath.TrimEnd(';') + ';' + $InstallDir
     }
     [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
     Write-Host "Added $InstallDir to user PATH (restart your terminal to pick it up)."

@@ -13,7 +13,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$PWD"
-APP_NAME="Screen Ruler"
 APP_ID="screen-ruler"
 SHORTCUT_DISPLAY="⌘⇧R (Cmd+Shift+R)"
 SERVICE_NAME="Launch Screen Ruler"
@@ -69,7 +68,7 @@ CONTENTS_DIR="$WORKFLOW_DIR/Contents"
 mkdir -p "$CONTENTS_DIR"
 
 # Info.plist — declares this as a Service (Quick Action) receiving no input.
-cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
+cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -81,7 +80,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
             <key>NSMenuItem</key>
             <dict>
                 <key>default</key>
-                <string>Launch Screen Ruler</string>
+                <string>${SERVICE_NAME}</string>
             </dict>
             <key>NSMessage</key>
             <string>runWorkflowAsService</string>

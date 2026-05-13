@@ -238,7 +238,7 @@ install_hyprland_shortcut() {
             return
         fi
         # Block exists but points to a different path — update it below.
-    elif grep -qE "exec,\s*\"?[^ ]*screen-ruler" "$config"; then
+    elif grep -qE "bind.*exec.*screen-ruler" "$config"; then
         echo "Hyprland: screen-ruler binding already present in $config"
         return
     fi
@@ -287,7 +287,7 @@ install_sway_shortcut() {
             echo "Sway: shortcut already up to date in $config"
             return
         fi
-    elif grep -qE "exec\s+\"?[^ ]*screen-ruler" "$config"; then
+    elif grep -qE "bindsym.*exec.*screen-ruler" "$config"; then
         echo "Sway: screen-ruler binding already present in $config"
         return
     fi
