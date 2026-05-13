@@ -138,8 +138,9 @@ install_gnome_shortcut() {
         local cmd
         cmd="$(gsettings get "$schema.custom-keybinding:$slot" command 2>/dev/null || true)"
         if [[ "$cmd" == *"$APP_ID"* ]]; then
+            gsettings set "$schema.custom-keybinding:$slot" name    "'$APP_NAME'"       || return 1
             gsettings set "$schema.custom-keybinding:$slot" command "'\"$EXEC_PATH\"'" || return 1
-            gsettings set "$schema.custom-keybinding:$slot" binding "'$binding'" || return 1
+            gsettings set "$schema.custom-keybinding:$slot" binding "'$binding'"        || return 1
             echo "Updated existing GNOME shortcut (${slot}) → $SHORTCUT_DISPLAY"
             return
         fi
@@ -221,9 +222,16 @@ install_hyprland_shortcut() {
         return 1
     fi
 
-    # Already has a marked block — update it; else check for legacy unmarked line.
+    # Already has a marked block — check if it's already up-to-date, else update it.
     if grep -qF "$begin_marker" "$config"; then
-        : # will be replaced below
+        local block
+        block="$(awk -v b="$begin_marker" -v e="$end_marker" \
+            '$0==b{f=1;next} $0==e{f=0;next} f{print}' "$config")"
+        if echo "$block" | grep -qF "$EXEC_PATH"; then
+            echo "Hyprland: shortcut already up to date in $config"
+            return
+        fi
+        # Block exists but points to a different path — update it below.
     elif grep -q "screen-ruler" "$config"; then
         echo "Hyprland: screen-ruler binding already present in $config"
         return
@@ -262,7 +270,13 @@ install_sway_shortcut() {
     fi
 
     if grep -qF "$begin_marker" "$config"; then
-        : # will be replaced below
+        local block
+        block="$(awk -v b="$begin_marker" -v e="$end_marker" \
+            '$0==b{f=1;next} $0==e{f=0;next} f{print}' "$config")"
+        if echo "$block" | grep -qF "$EXEC_PATH"; then
+            echo "Sway: shortcut already up to date in $config"
+            return
+        fi
     elif grep -q "screen-ruler" "$config"; then
         echo "Sway: screen-ruler binding already present in $config"
         return
