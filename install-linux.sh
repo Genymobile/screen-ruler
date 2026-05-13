@@ -138,7 +138,7 @@ install_gnome_shortcut() {
         local cmd
         cmd="$(gsettings get "$schema.custom-keybinding:$slot" command 2>/dev/null || true)"
         if [[ "$cmd" == *"$APP_ID"* ]]; then
-            gsettings set "$schema.custom-keybinding:$slot" command "'$EXEC_PATH'" || return 1
+            gsettings set "$schema.custom-keybinding:$slot" command "'\"$EXEC_PATH\"'" || return 1
             gsettings set "$schema.custom-keybinding:$slot" binding "'$binding'" || return 1
             echo "Updated existing GNOME shortcut (${slot}) → $SHORTCUT_DISPLAY"
             return
@@ -161,7 +161,7 @@ install_gnome_shortcut() {
     fi
 
     gsettings set "$schema.custom-keybinding:$new_slot" name "'$APP_NAME'" || return 1
-    gsettings set "$schema.custom-keybinding:$new_slot" command "'$EXEC_PATH'" || return 1
+    gsettings set "$schema.custom-keybinding:$new_slot" command "'\"$EXEC_PATH\"'" || return 1
     gsettings set "$schema.custom-keybinding:$new_slot" binding "'$binding'" || return 1
 
     echo "Registered GNOME shortcut ($new_slot) → $SHORTCUT_DISPLAY"
@@ -306,7 +306,7 @@ if [[ "$shortcut_ok" == false ]]; then
     echo "Could not register shortcut automatically for this desktop environment."
     echo "Bind '$EXEC_PATH' to your preferred shortcut manually."
     echo "See docs/manual-shortcut-setup.md for detailed instructions."
+else
+    echo
+    echo "Done. Press $SHORTCUT_DISPLAY to launch $APP_NAME."
 fi
-
-echo
-echo "Done. Press $SHORTCUT_DISPLAY to launch $APP_NAME."

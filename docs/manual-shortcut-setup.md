@@ -20,7 +20,7 @@ Open **Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts**, clic
 | Command | `screen-ruler` |
 | Shortcut | e.g. `Super+Shift+R` |
 
-Or via the terminal — this safely appends to any existing shortcuts:
+Or via the terminal (replace `custom0` with `custom1`, `custom2`, … if that slot is already in use):
 
 ```bash
 SCHEMA=org.gnome.settings-daemon.plugins.media-keys
@@ -37,8 +37,6 @@ gsettings set "$SCHEMA.custom-keybinding:$SLOT" name    'Screen Ruler'
 gsettings set "$SCHEMA.custom-keybinding:$SLOT" command 'screen-ruler'
 gsettings set "$SCHEMA.custom-keybinding:$SLOT" binding '<Super><Shift>r'
 ```
-
-> If `custom0` is already taken, change the slot to `custom1`, `custom2`, etc.
 
 ### KDE Plasma
 
