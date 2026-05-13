@@ -64,7 +64,12 @@ if (-not [string]::IsNullOrEmpty($userPath)) {
 
 $hasInstallDir = $false
 foreach ($entry in $pathEntries) {
-    $normalizedEntry = [IO.Path]::GetFullPath($entry).TrimEnd('\').ToLowerInvariant()
+    $expandedEntry = [Environment]::ExpandEnvironmentVariables($entry)
+    try {
+        $normalizedEntry = [IO.Path]::GetFullPath($expandedEntry).TrimEnd('\').ToLowerInvariant()
+    } catch {
+        continue
+    }
     if ($normalizedEntry -eq $normalizedInstallDir) {
         $hasInstallDir = $true
         break
@@ -85,6 +90,7 @@ if (-not $hasInstallDir) {
 
 $startMenu   = [Environment]::GetFolderPath('StartMenu')
 $programsDir = Join-Path $startMenu 'Programs'
+New-Item -ItemType Directory -Path $programsDir -Force | Out-Null
 $lnkPath     = Join-Path $programsDir "$AppName.lnk"
 
 $shell    = New-Object -ComObject WScript.Shell

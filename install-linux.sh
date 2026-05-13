@@ -90,12 +90,16 @@ DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 mkdir -p "$DESKTOP_DIR"
 DESKTOP_FILE="$DESKTOP_DIR/$APP_ID.desktop"
 
+# Escape the path per the Desktop Entry spec: backslashes first, then spaces.
+DESKTOP_EXEC="${EXEC_PATH//\\/\\\\}"
+DESKTOP_EXEC="${DESKTOP_EXEC// /\\ }"
+
 cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Name=$APP_NAME
 Comment=Measure on-screen UI elements using edge detection
-Exec="$EXEC_PATH"
+Exec=$DESKTOP_EXEC
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;
@@ -186,8 +190,8 @@ install_kde_shortcut() {
 
     # Also add an Actions line to the .desktop file so KDE can map it.
     if ! grep -q "^Actions=" "$DESKTOP_FILE"; then
-        printf '\nActions=_launch;\n\n[Desktop Action _launch]\nName=Launch %s\nExec="%s"\n' \
-            "$APP_NAME" "$EXEC_PATH" >> "$DESKTOP_FILE"
+        printf '\nActions=_launch;\n\n[Desktop Action _launch]\nName=Launch %s\nExec=%s\n' \
+            "$APP_NAME" "$DESKTOP_EXEC" >> "$DESKTOP_FILE"
     fi
 
     # Rebuild KDE's system config cache.
