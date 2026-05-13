@@ -128,7 +128,7 @@ install_gnome_shortcut() {
 
     # Read the current list of custom-keybinding slots.
     local current
-    current="$(gsettings get "$schema" custom-keybindings)"
+    current="$(gsettings get "$schema" custom-keybindings)" || return 1
 
     # Check if screen-ruler is already registered in any slot.
     local slots
@@ -138,8 +138,8 @@ install_gnome_shortcut() {
         local cmd
         cmd="$(gsettings get "$schema.custom-keybinding:$slot" command 2>/dev/null || true)"
         if [[ "$cmd" == *"$APP_ID"* ]]; then
-            gsettings set "$schema.custom-keybinding:$slot" command "'$EXEC_PATH'"
-            gsettings set "$schema.custom-keybinding:$slot" binding "'$binding'"
+            gsettings set "$schema.custom-keybinding:$slot" command "'$EXEC_PATH'" || return 1
+            gsettings set "$schema.custom-keybinding:$slot" binding "'$binding'" || return 1
             echo "Updated existing GNOME shortcut (${slot}) → $SHORTCUT_DISPLAY"
             return
         fi
@@ -153,16 +153,16 @@ install_gnome_shortcut() {
     local new_slot="$path_prefix/custom${idx}/"
 
     if [[ "$current" == "@as []" ]]; then
-        gsettings set "$schema" custom-keybindings "['$new_slot']"
+        gsettings set "$schema" custom-keybindings "['$new_slot']" || return 1
     else
         local updated
         updated="$(echo "$current" | sed "s|]$|, '$new_slot']|")"
-        gsettings set "$schema" custom-keybindings "$updated"
+        gsettings set "$schema" custom-keybindings "$updated" || return 1
     fi
 
-    gsettings set "$schema.custom-keybinding:$new_slot" name "'$APP_NAME'"
-    gsettings set "$schema.custom-keybinding:$new_slot" command "'$EXEC_PATH'"
-    gsettings set "$schema.custom-keybinding:$new_slot" binding "'$binding'"
+    gsettings set "$schema.custom-keybinding:$new_slot" name "'$APP_NAME'" || return 1
+    gsettings set "$schema.custom-keybinding:$new_slot" command "'$EXEC_PATH'" || return 1
+    gsettings set "$schema.custom-keybinding:$new_slot" binding "'$binding'" || return 1
 
     echo "Registered GNOME shortcut ($new_slot) → $SHORTCUT_DISPLAY"
 }
@@ -184,23 +184,31 @@ install_kde_shortcut() {
 
     # Write the shortcut entry.
     "$kwrite" --file "$config_file" --group "$group" \
-        --key "_k_friendly_name" "$APP_NAME"
+        --key "_k_friendly_name" "$APP_NAME" || return 1
     "$kwrite" --file "$config_file" --group "$group" \
-        --key "_launch" "${binding},none,Launch ${APP_NAME}"
+        --key "_launch" "${binding},none,Launch ${APP_NAME}" || return 1
 
     # Also add an Actions line to the .desktop file so KDE can map it.
     if ! grep -q "^Actions=" "$DESKTOP_FILE"; then
         printf '\nActions=_launch;\n\n[Desktop Action _launch]\nName=Launch %s\nExec=%s\n' \
-            "$APP_NAME" "$DESKTOP_EXEC" >> "$DESKTOP_FILE"
+            "$APP_NAME" "$DESKTOP_EXEC" >> "$DESKTOP_FILE" || return 1
     fi
 
     # Rebuild KDE's system config cache.
-    if   command -v kbuildsycoca6 &>/dev/null; then kbuildsycoca6 2>/dev/null
-    elif command -v kbuildsycoca5 &>/dev/null; then kbuildsycoca5 2>/dev/null
+    if   command -v kbuildsycoca6 &>/dev/null; then kbuildsycoca6 2>/dev/null || true
+    elif command -v kbuildsycoca5 &>/dev/null; then kbuildsycoca5 2>/dev/null || true
+    fi
+
+    # Pick the correct global-accel restart commands for the detected Plasma version.
+    local restart_hint
+    if [[ "$kwrite" == "kwriteconfig6" ]]; then
+        restart_hint="kquitapp6 kglobalaccel && kstart6 kglobalaccel"
+    else
+        restart_hint="kquitapp5 kglobalaccel && kstart5 kglobalaccel"
     fi
 
     echo "Registered KDE Plasma shortcut → Meta+Shift+R"
-    echo "You may need to log out and back in (or run kquitapp5 kglobalaccel && kstart5 kglobalaccel) for the shortcut to activate."
+    echo "You may need to log out and back in (or run: $restart_hint) for the shortcut to activate."
 }
 
 install_hyprland_shortcut() {
