@@ -6,7 +6,11 @@ In all examples, replace `screen-ruler` with the full path to the binary if it i
 
 ## Linux
 
-### GNOME (Ubuntu)
+> **Tip:** `install-linux.sh` auto-detects your desktop environment (GNOME,
+> KDE Plasma, Hyprland, Sway) and registers **Super+Shift+R** automatically.
+> Use these manual steps only if the script doesn't cover your setup.
+
+### GNOME
 
 Open **Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts**, click **+** and fill in:
 
@@ -16,36 +20,28 @@ Open **Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts**, clic
 | Command | `screen-ruler` |
 | Shortcut | e.g. `Super+Shift+R` |
 
-Or via the command line (safe append — preserves any existing custom shortcuts):
+Or via the terminal — this safely appends to any existing shortcuts:
 
 ```bash
 SCHEMA=org.gnome.settings-daemon.plugins.media-keys
-PREFIX=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings
+SLOT=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/
 
-# Choose an unused slot index (increment if custom0 is already taken)
-SLOT="$PREFIX/custom0/"
-
-# Read the current list and append the new slot only if not already present
 CURRENT="$(gsettings get "$SCHEMA" custom-keybindings)"
-if echo "$CURRENT" | grep -qF "$SLOT"; then
-  echo "Slot already registered"
-else
-  if [ "$CURRENT" = "@as []" ]; then
-    NEW_LIST="['$SLOT']"
-  else
-    NEW_LIST="$(echo "$CURRENT" | sed "s|]$|, '$SLOT']|")"
-  fi
-  gsettings set "$SCHEMA" custom-keybindings "$NEW_LIST"
-fi
+NEW_LIST="$([ "$CURRENT" = "@as []" ] \
+  && echo "['$SLOT']" \
+  || echo "${CURRENT/%]/, '$SLOT']}")"
 
-gsettings set "$SCHEMA.custom-keybinding:$SLOT" name 'Screen Ruler'
+gsettings set "$SCHEMA" custom-keybindings "$NEW_LIST"
+gsettings set "$SCHEMA.custom-keybinding:$SLOT" name    'Screen Ruler'
 gsettings set "$SCHEMA.custom-keybinding:$SLOT" command 'screen-ruler'
 gsettings set "$SCHEMA.custom-keybinding:$SLOT" binding '<Super><Shift>r'
 ```
 
+> If `custom0` is already taken, change the slot to `custom1`, `custom2`, etc.
+
 ### KDE Plasma
 
-**System Settings → Shortcuts → Custom Shortcuts → Edit → New → Global Shortcut → Command/URL**, then set the command to `screen-ruler` and choose your key combination.
+**System Settings → Shortcuts → Custom Shortcuts → Edit → New → Global Shortcut → Command/URL**, set the command to `screen-ruler`, and press your preferred key combination.
 
 ### Hyprland
 
