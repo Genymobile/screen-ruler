@@ -46,7 +46,6 @@ Window {
     property real rectSnapDistance: 10
     property bool helpOverlayVisible: false
     property bool startupHelpActive: false
-    property bool suppressNextCopyRequest: false
     property real helpOverlayOpacity: 0.0
     property bool sessionMode: false
     property int pendingDestructiveKey: -1
@@ -420,7 +419,6 @@ Window {
     function dismissStartupHelpFromPointer() {
         if (!startupHelpActive || !helpOverlayVisible)
             return
-        suppressNextCopyRequest = true
         hideHelpOverlay()
     }
 
@@ -626,10 +624,6 @@ Window {
         }
 
         onCopyRequested: {
-            if (root.suppressNextCopyRequest) {
-                root.suppressNextCopyRequest = false
-                return
-            }
             root.clearPendingDestructiveAction()
             if (root.sessionMode)
                 return
