@@ -44,6 +44,10 @@ Window {
     property real containerWidth: 0
     property real containerHeight: 0
     property real rectSnapDistance: 10
+    property bool helpOverlayVisible: false
+    property bool startupHelpActive: false
+    property bool suppressNextCopyRequest: false
+    property real helpOverlayOpacity: 0.0
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
@@ -209,6 +213,52 @@ Window {
                || (activeMode === modeContainerTrace && containerHasSelection)
     }
 
+    function modeSpecificHint() {
+        if (activeMode === modeRectDrag)
+            return "Mode hint: Scroll to adjust snap distance"
+        return "Mode hint: Scroll to adjust sensitivity"
+    }
+
+    function showStartupHelpOverlay() {
+        startupHelpActive = true
+        helpOverlayVisible = true
+        helpOverlayOpacity = 1.0
+        helpFadeAnimation.stop()
+        helpAutoHideTimer.restart()
+    }
+
+    function hideHelpOverlay() {
+        startupHelpActive = false
+        helpAutoHideTimer.stop()
+        helpFadeAnimation.stop()
+        helpOverlayVisible = false
+        helpOverlayOpacity = 0.0
+    }
+
+    function dismissStartupHelpOverlay() {
+        if (!startupHelpActive || !helpOverlayVisible)
+            return
+        hideHelpOverlay()
+    }
+
+    function toggleHelpOverlay() {
+        if (helpOverlayVisible) {
+            hideHelpOverlay()
+            return
+        }
+        startupHelpActive = false
+        helpOverlayVisible = true
+        helpOverlayOpacity = 1.0
+        helpFadeAnimation.stop()
+    }
+
+    function dismissStartupHelpFromPointer() {
+        if (!startupHelpActive || !helpOverlayVisible)
+            return
+        suppressNextCopyRequest = true
+        hideHelpOverlay()
+    }
+
     function activeMeasurementText(includeUnit) {
         if (activeMode === modeRectDrag)
             return Format.roundedPair(rectWidth, rectHeight, includeUnit)
@@ -219,17 +269,17 @@ Window {
         return Format.roundedPair(widthPx, heightPx, includeUnit)
     }
 
-     readonly property real labelX: activeMode === modeRectDrag
+    readonly property real labelX: activeMode === modeRectDrag
                                             ? rectLeft + RulerTheme.baseMargin
                                             : (activeMode === modeContainerTrace
                                                 ? containerX + RulerTheme.baseMargin
                                                 : (hasBackend ? backend.cursorX : -RulerTheme.baseMargin) + RulerTheme.baseMargin)
-     readonly property real labelY: activeMode === modeRectDrag
+    readonly property real labelY: activeMode === modeRectDrag
                                             ? rectTop + RulerTheme.labelOffsetY
                                             : (activeMode === modeContainerTrace
                                                 ? containerY + RulerTheme.labelOffsetY
                                                 : (hasBackend ? backend.cursorY : -RulerTheme.labelOffsetY) + RulerTheme.labelOffsetY)
-     readonly property bool labelVisible: activeMode === modeRectDrag
+    readonly property bool labelVisible: activeMode === modeRectDrag
                                                   ? rectHasSelection
                                                   : (activeMode === modeContainerTrace
                                                       ? containerHasSelection
@@ -267,6 +317,7 @@ Window {
     Component.onCompleted: {
         requestActivate()
         keyInputLayer.forceActiveFocus()
+        showStartupHelpOverlay()
     }
 
     Shortcut {
@@ -279,12 +330,47 @@ Window {
         onActivated: Qt.quit()
     }
 
+    Shortcut {
+        sequence: "1"
+        onActivated: root.setActiveMode(modeDynamicEdge)
+    }
+
+    Shortcut {
+        sequence: "2"
+        onActivated: root.setActiveMode(modeRectDrag)
+    }
+
+    Shortcut {
+        sequence: "3"
+        onActivated: root.setActiveMode(modeContainerTrace)
+    }
+
+    Shortcut {
+        sequence: "Ctrl+C"
+        onActivated: {
+            if (!hasBackend || !root.canCopyCurrentMeasurement())
+                return
+            backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
+        }
+    }
+
+    Shortcut {
+        sequence: "?"
+        onActivated: root.toggleHelpOverlay()
+    }
+
+    Shortcut {
+        sequence: "H"
+        onActivated: root.toggleHelpOverlay()
+    }
+
     Item {
         id: keyInputLayer
         anchors.fill: parent
         focus: true
 
         Keys.onPressed: (event) => {
+            root.dismissStartupHelpOverlay()
             if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
                 event.accepted = true
                 Qt.quit()
@@ -302,6 +388,7 @@ Window {
         canCopy: root.canCopyCurrentMeasurement()
 
         onPointerPressed: (x, y, button) => {
+            root.dismissStartupHelpFromPointer()
             root.updatePointer(x, y)
             if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
                 root.beginRectDrag()
@@ -320,6 +407,12 @@ Window {
         }
 
         onCopyRequested: {
+            if (root.suppressNextCopyRequest) {
+                root.suppressNextCopyRequest = false
+                return
+            }
+            if (!hasBackend)
+                return
             backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
         }
 
@@ -328,83 +421,82 @@ Window {
         }
     }
 
-    Rectangle {
+    ControlsPanel {
         id: controlsPanel
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: RulerTheme.baseMargin
-        width: RulerTheme.controlsPanelWidth
-        height: root.activeMode === modeRectDrag ? 136 : 104
-        radius: RulerTheme.cornerRadius
-        color: RulerTheme.panelBackgroundColor
-        opacity: RulerTheme.panelOpacity
-        z: 30
+        activeMode: root.activeMode
+        modeRectDrag: root.modeRectDrag
+        hasBackend: root.hasBackend
+        sensitivityMin: root.sensitivityMin
+        sensitivityMax: root.sensitivityMax
+        sensitivityStep: root.sensitivityStep
+        sensitivityDefaultValue: root.sensitivityDefaultValue
+        sensitivityValue: hasBackend ? backend.sensitivity : root.sensitivityDefaultValue
+        rectSnapMin: root.rectSnapMin
+        rectSnapMax: root.rectSnapMax
+        rectSnapStep: root.rectSnapStep
+        rectSnapDistance: root.rectSnapDistance
 
-        MouseArea {
-            anchors.fill: parent
-            onClicked: (mouse) => mouse.accepted = true
+        onPanelPressed: root.dismissStartupHelpOverlay()
+        onModeSelected: (mode) => root.setActiveMode(mode)
+        onSensitivityMoved: (value) => root.applySensitivityValue(value)
+        onSnapMoved: (value) => root.applySnapDistanceValue(value)
+    }
+
+    Connections {
+        target: hasBackend ? backend : null
+        function onControlsChanged() {
+            if (!controlsPanel.sensitivitySliderPressed) {
+                controlsPanel.sensitivitySliderValue = backend.sensitivity
+            }
+            root.refreshSnappedPointer()
+            root.refreshContainerSelection()
         }
+    }
 
-        Column {
-            anchors.fill: parent
-            anchors.topMargin: 8
-            anchors.bottomMargin: 8
-            anchors.leftMargin: RulerTheme.baseMargin
-            anchors.rightMargin: RulerTheme.baseMargin
-            spacing: RulerTheme.controlsColumnSpacing
-
-            ModeSelector {
-                activeMode: root.activeMode
-                anchors.horizontalCenter: parent.horizontalCenter
-                onModeSelected: (mode) => root.setActiveMode(mode)
-            }
-
-            LabeledSliderRow {
-                id: sensitivityRow
-                anchors.horizontalCenter: parent.horizontalCenter
-                label: "Sensitivity"
-                fromValue: sensitivityMin
-                toValue: sensitivityMax
-                stepValue: sensitivityStep
-                sliderEnabled: hasBackend
-                sliderValue: hasBackend ? backend.sensitivity : sensitivityDefaultValue
-                onMoved: (value) => root.applySensitivityValue(value)
-            }
-
-            LabeledSliderRow {
-                id: snapRow
-                anchors.horizontalCenter: parent.horizontalCenter
-                label: "Snap (px)"
-                fromValue: rectSnapMin
-                toValue: rectSnapMax
-                stepValue: rectSnapStep
-                sliderEnabled: hasBackend && root.activeMode === modeRectDrag
-                visible: root.activeMode === modeRectDrag
-                sliderValue: rectSnapDistance
-                onMoved: (value) => root.applySnapDistanceValue(value)
-            }
+    Connections {
+        target: root
+        function onActiveModeChanged() {
+            if (!controlsPanel.sensitivitySliderPressed && hasBackend)
+                controlsPanel.sensitivitySliderValue = backend.sensitivity
+            if (!controlsPanel.snapSliderPressed)
+                controlsPanel.snapSliderValue = root.rectSnapDistance
+            root.refreshSnappedPointer()
+            root.refreshContainerSelection()
         }
+    }
 
-        Connections {
-            target: hasBackend ? backend : null
-            function onControlsChanged() {
-                if (!sensitivityRow.sliderPressed) {
-                    sensitivityRow.sliderValue = backend.sensitivity
-                }
-                root.refreshSnappedPointer()
-                root.refreshContainerSelection()
-            }
-        }
+    ShortcutHelpOverlay {
+        id: helpOverlay
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: RulerTheme.baseMargin
+        anchors.rightMargin: RulerTheme.baseMargin
+        overlayVisible: root.helpOverlayVisible
+        overlayOpacity: root.helpOverlayOpacity
+        modeHint: root.modeSpecificHint()
+    }
 
-        Connections {
-            target: root
-            function onActiveModeChanged() {
-                if (!sensitivityRow.sliderPressed && hasBackend)
-                    sensitivityRow.sliderValue = backend.sensitivity
-                if (!snapRow.sliderPressed)
-                    snapRow.sliderValue = root.rectSnapDistance
-                root.refreshSnappedPointer()
-                root.refreshContainerSelection()
+    Timer {
+        id: helpAutoHideTimer
+        interval: RulerTheme.helpOverlayAutoHideMs
+        repeat: false
+        onTriggered: helpFadeAnimation.restart()
+    }
+
+    NumberAnimation {
+        id: helpFadeAnimation
+        target: root
+        property: "helpOverlayOpacity"
+        to: 0.0
+        duration: RulerTheme.helpOverlayFadeMs
+        easing.type: Easing.OutQuad
+        onFinished: {
+            if (root.helpOverlayOpacity <= 0.01) {
+                root.helpOverlayVisible = false
+                root.startupHelpActive = false
             }
         }
     }
