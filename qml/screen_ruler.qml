@@ -49,11 +49,15 @@ Window {
     property bool suppressNextCopyRequest: false
     property real helpOverlayOpacity: 0.0
     property bool sessionMode: false
+    property int pendingDestructiveKey: -1
+    property string pendingDestructiveMessage: ""
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
+    readonly property int destructiveActionConfirmMs: 1500
 
     function setActiveMode(mode) {
+        clearPendingDestructiveAction()
         var clamped = Math.max(modeDynamicEdge, Math.min(modeContainerTrace, mode))
         if (activeMode === clamped)
             return
@@ -92,21 +96,87 @@ Window {
     function setSessionMode(enabled) {
         if (sessionMode === enabled)
             return
+        clearPendingDestructiveAction()
         sessionMode = enabled
         if (!enabled && hasBackend)
             backend.clearAnnotations()
     }
 
-    function toggleSessionMode() {
-        setSessionMode(!sessionMode)
+    function hasPersistentSessionAnnotations() {
+        return sessionMode && hasBackend && backend.annotationCount > 0
+    }
+
+    function clearPendingDestructiveAction() {
+        pendingDestructiveKey = -1
+        pendingDestructiveMessage = ""
+        destructiveActionTimer.stop()
+    }
+
+    function pendingMessageForKey(key) {
+        if (key === Qt.Key_Tab)
+            return "Press Tab again to discard annotations"
+        if (key === Qt.Key_Escape)
+            return "Press Esc again to discard annotations"
+        if (key === Qt.Key_Q)
+            return "Press Q again to discard annotations"
+        return ""
+    }
+
+    function performDestructiveAction(key) {
+        if (key === Qt.Key_Tab) {
+            setSessionMode(false)
+            return
+        }
+        if (key === Qt.Key_Escape) {
+            if (sessionMode) {
+                setSessionMode(false)
+                return
+            }
+            Qt.quit()
+            return
+        }
+        if (key === Qt.Key_Q)
+            Qt.quit()
+    }
+
+    function requestDestructiveAction(key) {
+        if (!hasPersistentSessionAnnotations()) {
+            clearPendingDestructiveAction()
+            performDestructiveAction(key)
+            return
+        }
+
+        if (pendingDestructiveKey === key) {
+            clearPendingDestructiveAction()
+            performDestructiveAction(key)
+            return
+        }
+
+        pendingDestructiveKey = key
+        pendingDestructiveMessage = pendingMessageForKey(key)
+        destructiveActionTimer.restart()
+    }
+
+    function handleTabAction() {
+        if (!sessionMode) {
+            clearPendingDestructiveAction()
+            setSessionMode(true)
+            return
+        }
+        requestDestructiveAction(Qt.Key_Tab)
     }
 
     function handleEscapeAction() {
         if (sessionMode) {
-            setSessionMode(false)
+            requestDestructiveAction(Qt.Key_Escape)
             return
         }
+        clearPendingDestructiveAction()
         Qt.quit()
+    }
+
+    function handleQuitAction() {
+        requestDestructiveAction(Qt.Key_Q)
     }
 
     function updatePointer(x, y) {
@@ -422,7 +492,7 @@ Window {
 
     Shortcut {
         sequence: "Q"
-        onActivated: Qt.quit()
+        onActivated: root.handleQuitAction()
     }
 
     Shortcut {
@@ -443,6 +513,7 @@ Window {
     Shortcut {
         sequence: "Ctrl+C"
         onActivated: {
+            root.clearPendingDestructiveAction()
             if (!hasBackend)
                 return
             if (root.sessionMode)
@@ -455,12 +526,13 @@ Window {
 
     Shortcut {
         sequence: "Tab"
-        onActivated: root.toggleSessionMode()
+        onActivated: root.handleTabAction()
     }
 
     Shortcut {
         sequence: "Ctrl+Z"
         onActivated: {
+            root.clearPendingDestructiveAction()
             if (root.sessionMode && hasBackend)
                 backend.removeLastAnnotation()
         }
@@ -469,6 +541,7 @@ Window {
     Shortcut {
         sequence: "Z"
         onActivated: {
+            root.clearPendingDestructiveAction()
             if (root.sessionMode && hasBackend)
                 backend.removeLastAnnotation()
         }
@@ -477,6 +550,7 @@ Window {
     Shortcut {
         sequence: "Ctrl+Shift+Z"
         onActivated: {
+            root.clearPendingDestructiveAction()
             if (root.sessionMode && hasBackend)
                 backend.redoAnnotation()
         }
@@ -484,12 +558,18 @@ Window {
 
     Shortcut {
         sequence: "?"
-        onActivated: root.toggleHelpOverlay()
+        onActivated: {
+            root.clearPendingDestructiveAction()
+            root.toggleHelpOverlay()
+        }
     }
 
     Shortcut {
         sequence: "H"
-        onActivated: root.toggleHelpOverlay()
+        onActivated: {
+            root.clearPendingDestructiveAction()
+            root.toggleHelpOverlay()
+        }
     }
 
     Item {
@@ -504,7 +584,7 @@ Window {
                 if (event.key === Qt.Key_Escape)
                     root.handleEscapeAction()
                 else
-                    Qt.quit()
+                    root.handleQuitAction()
             }
         }
     }
@@ -520,6 +600,7 @@ Window {
         sessionMode: root.sessionMode
 
         onPointerPressed: (x, y, button) => {
+            root.clearPendingDestructiveAction()
             root.dismissStartupHelpFromPointer()
             root.updatePointer(x, y)
             if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
@@ -547,6 +628,7 @@ Window {
                 root.suppressNextCopyRequest = false
                 return
             }
+            root.clearPendingDestructiveAction()
             if (root.sessionMode)
                 return
             if (!hasBackend)
@@ -555,6 +637,7 @@ Window {
         }
 
         onSessionClickRequested: (x, y) => {
+            root.clearPendingDestructiveAction()
             root.updatePointer(x, y)
             // Rect drag commits on mouse release, not via click
             if (root.activeMode === modeRectDrag)
@@ -565,6 +648,7 @@ Window {
         }
 
         onWheelAdjusted: (deltaY) => {
+            root.clearPendingDestructiveAction()
             root.adjustActiveModeSliderByWheel(deltaY)
         }
     }
@@ -587,10 +671,18 @@ Window {
         rectSnapStep: root.rectSnapStep
         rectSnapDistance: root.rectSnapDistance
 
-        onPanelPressed: root.dismissStartupHelpOverlay()
+        onPanelPressed: { root.clearPendingDestructiveAction(); root.dismissStartupHelpOverlay() }
         onModeSelected: (mode) => { root.dismissStartupHelpOverlay(); root.setActiveMode(mode) }
-        onSensitivityMoved: (value) => { root.dismissStartupHelpOverlay(); root.applySensitivityValue(value) }
-        onSnapMoved: (value) => { root.dismissStartupHelpOverlay(); root.applySnapDistanceValue(value) }
+        onSensitivityMoved: (value) => {
+            root.clearPendingDestructiveAction()
+            root.dismissStartupHelpOverlay()
+            root.applySensitivityValue(value)
+        }
+        onSnapMoved: (value) => {
+            root.clearPendingDestructiveAction()
+            root.dismissStartupHelpOverlay()
+            root.applySnapDistanceValue(value)
+        }
     }
 
     Connections {
@@ -628,6 +720,7 @@ Window {
     }
 
     Rectangle {
+        id: sessionModeBadge
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.leftMargin: RulerTheme.baseMargin
@@ -651,6 +744,29 @@ Window {
     }
 
     Rectangle {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        visible: root.sessionMode && root.pendingDestructiveMessage !== ""
+        z: 45
+        radius: RulerTheme.cornerRadius + 2
+        color: RulerTheme.panelBackgroundColor
+        opacity: 0.95
+        border.width: 2
+        border.color: RulerTheme.sessionModeBorderColor
+        width: Math.min(parent.width - 80, destructiveHintLabel.implicitWidth + 48)
+        height: destructiveHintLabel.implicitHeight + 28
+
+        Text {
+            id: destructiveHintLabel
+            anchors.centerIn: parent
+            text: root.pendingDestructiveMessage
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsTitlePointSize + 4
+            font.bold: true
+        }
+    }
+
+    Rectangle {
         visible: root.sessionMode
         z: 35
         anchors.fill: parent
@@ -658,6 +774,13 @@ Window {
         border.width: RulerTheme.sessionModeBorderThickness
         border.color: RulerTheme.sessionModeBorderColor
         opacity: root.sessionBorderOpacity
+    }
+
+    Timer {
+        id: destructiveActionTimer
+        interval: root.destructiveActionConfirmMs
+        repeat: false
+        onTriggered: root.clearPendingDestructiveAction()
     }
 
     Timer {
