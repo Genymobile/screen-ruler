@@ -5,7 +5,6 @@ Rectangle {
 
     required property bool overlayVisible
     required property real overlayOpacity
-    required property string modeHint
 
     width: RulerTheme.controlsPanelWidth
     height: helpOverlayContent.implicitHeight + 2 * RulerTheme.helpOverlayVerticalPadding
@@ -39,13 +38,7 @@ Rectangle {
         }
 
         Text {
-            text: "Tab — enter session mode (#6)"
-            color: RulerTheme.primaryTextColor
-            font.pointSize: RulerTheme.controlsValuePointSize
-        }
-
-        Text {
-            text: "Ctrl+C — copy measurement to clipboard"
+            text: "Ctrl+C — copy measurement, then quit"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
@@ -57,16 +50,15 @@ Rectangle {
         }
 
         Text {
-            text: "? / H — toggle this help"
+            text: "Mouse wheel — adjust sensitivity/snap distance"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
 
         Text {
-            text: root.modeHint
+            text: "? / H — toggle this help"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
-            font.italic: true
         }
     }
 }

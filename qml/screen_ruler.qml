@@ -213,12 +213,6 @@ Window {
                || (activeMode === modeContainerTrace && containerHasSelection)
     }
 
-    function modeSpecificHint() {
-        if (activeMode === modeRectDrag)
-            return "Mode hint: Scroll to adjust snap distance"
-        return "Mode hint: Scroll to adjust sensitivity"
-    }
-
     function showStartupHelpOverlay() {
         startupHelpActive = true
         helpOverlayVisible = true
@@ -440,9 +434,9 @@ Window {
         rectSnapDistance: root.rectSnapDistance
 
         onPanelPressed: root.dismissStartupHelpOverlay()
-        onModeSelected: (mode) => root.setActiveMode(mode)
-        onSensitivityMoved: (value) => root.applySensitivityValue(value)
-        onSnapMoved: (value) => root.applySnapDistanceValue(value)
+        onModeSelected: (mode) => { root.dismissStartupHelpOverlay(); root.setActiveMode(mode) }
+        onSensitivityMoved: (value) => { root.dismissStartupHelpOverlay(); root.applySensitivityValue(value) }
+        onSnapMoved: (value) => { root.dismissStartupHelpOverlay(); root.applySnapDistanceValue(value) }
     }
 
     Connections {
@@ -476,7 +470,6 @@ Window {
         anchors.rightMargin: RulerTheme.baseMargin
         overlayVisible: root.helpOverlayVisible
         overlayOpacity: root.helpOverlayOpacity
-        modeHint: root.modeSpecificHint()
     }
 
     Timer {
