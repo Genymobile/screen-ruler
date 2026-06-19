@@ -24,12 +24,20 @@ QtObject {
 
     // Controls panel defaults
     readonly property int controlsPanelWidth: 380
+    readonly property int controlsPanelCompactHeight: 104
+    readonly property int controlsPanelExpandedHeight: 136
+    readonly property int controlsPanelVerticalPadding: 8
     readonly property int controlsRowSpacing: 12
     readonly property int controlsColumnSpacing: 8
     readonly property int modeRowSpacing: 8
 
     readonly property int controlsTitlePointSize: 11
     readonly property int controlsValuePointSize: 10
+
+    readonly property int helpOverlayVerticalPadding: 10
+    readonly property int helpOverlayColumnSpacing: 4
+    readonly property int helpOverlayAutoHideMs: 2000
+    readonly property int helpOverlayFadeMs: 220
 
     readonly property int modeButtonSize: 30
     readonly property int modeButtonRadius: 4

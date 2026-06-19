@@ -26,6 +26,8 @@ a = Analysis(
         ('qml/CrosshairCanvas.qml', 'qml'),
         ('qml/SnappedPointerMarker.qml', 'qml'),
         ('qml/MeasurementLabel.qml', 'qml'),
+        ('qml/ControlsPanel.qml', 'qml'),
+        ('qml/ShortcutHelpOverlay.qml', 'qml'),
         ('qml/screen_ruler_format.js', 'qml'),
     ],
     # cv2 is imported inside a try/except; declare it explicitly so

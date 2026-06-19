@@ -46,7 +46,12 @@ def parse_args() -> argparse.Namespace:
         epilog=(
             "Mouse interactions:\n"
             "  - Left click: copy the current measurement to clipboard and quit\n"
-            "  - Mouse wheel: adjust sensitivity"
+            "  - Mouse wheel: adjust sensitivity\n"
+            "Keyboard shortcuts:\n"
+            "  - 1 / 2 / 3: switch measurement mode\n"
+            "  - Ctrl+C: copy measurement to clipboard and quit\n"
+            "  - ? / H: toggle shortcut overlay\n"
+            "  - Esc / Q: quit"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )

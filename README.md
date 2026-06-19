@@ -38,9 +38,14 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 
 | Input | Action |
 |---|---|
+| `1` / `2` / `3` | Switch measurement mode |
+| `Ctrl+C` | Copy current measurement to clipboard, then quit |
+| `?` or `H` | Toggle the shortcut help overlay |
 | `Escape` or `Q` | Quit |
 | Left click | Copy current measurement as `W × H px` to clipboard, then quit |
 | Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
+
+On launch, a lightweight shortcut overlay is shown briefly and fades automatically; press `?` or `H` any time to bring it back.
 
 ## Build a standalone executable
 
