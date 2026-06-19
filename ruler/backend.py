@@ -32,6 +32,7 @@ class RulerBackend(QObject):
     staticChanged = pyqtSignal()
     controlsChanged = pyqtSignal()
     edgeMapPreviewRequested = pyqtSignal()
+    annotationsChanged = pyqtSignal()
 
     def __init__(
         self,
@@ -76,6 +77,8 @@ class RulerBackend(QObject):
         self._H: int = 0
         self._region_labels: np.ndarray | None = None
         self._region_stats: np.ndarray | None = None
+        self._annotations: list[dict] = []
+        self._redo_stack: list[dict] = []
 
         self._recompute_timer = QTimer(self)
         self._recompute_timer.setSingleShot(True)
@@ -376,6 +379,44 @@ class RulerBackend(QObject):
             self.edgeMapPreviewRequested.emit()
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Annotation model
+    # ------------------------------------------------------------------
+
+    @pyqtProperty("QVariantList", notify=annotationsChanged)
+    def annotations(self) -> list[dict]:
+        return list(self._annotations)
+
+    @pyqtProperty(int, notify=annotationsChanged)
+    def annotationCount(self) -> int:
+        return len(self._annotations)
+
+    @pyqtSlot("QVariantMap")
+    def addAnnotation(self, data: dict) -> None:
+        self._annotations.append(dict(data))
+        self._redo_stack.clear()
+        self.annotationsChanged.emit()
+
+    @pyqtSlot()
+    def removeLastAnnotation(self) -> None:
+        if self._annotations:
+            self._redo_stack.append(self._annotations.pop())
+            self.annotationsChanged.emit()
+
+    @pyqtSlot()
+    def redoAnnotation(self) -> None:
+        if self._redo_stack:
+            self._annotations.append(self._redo_stack.pop())
+            self.annotationsChanged.emit()
+
+    @pyqtSlot()
+    def clearAnnotations(self) -> None:
+        changed = bool(self._annotations) or bool(self._redo_stack)
+        self._annotations.clear()
+        self._redo_stack.clear()
+        if changed:
+            self.annotationsChanged.emit()
 
     @pyqtSlot(str)
     def copyTextToClipboardAndQuit(self, text: str) -> None:

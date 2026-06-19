@@ -76,6 +76,20 @@ Rectangle {
         }
 
         Text {
+            text: "Ctrl+Z / Z — undo last annotation"
+            visible: root.sessionMode
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+        }
+
+        Text {
+            text: "Ctrl+Shift+Z — redo annotation"
+            visible: root.sessionMode
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+        }
+
+        Text {
             text: "Mouse wheel — adjust sensitivity/snap distance"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize

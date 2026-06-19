@@ -93,6 +93,8 @@ Window {
         if (sessionMode === enabled)
             return
         sessionMode = enabled
+        if (!enabled && hasBackend)
+            backend.clearAnnotations()
     }
 
     function toggleSessionMode() {
@@ -258,6 +260,58 @@ Window {
     }
 
     function requestSessionAnnotationPlacement() {
+        if (!hasBackend)
+            return
+        var data = {}
+        if (activeMode === modeDynamicEdge) {
+            data = {
+                mode: modeDynamicEdge,
+                x: backend.cursorX,
+                y: backend.cursorY,
+                width: backend.widthPx,
+                height: backend.heightPx,
+                text: activeMeasurementText(true),
+                cursorX: backend.cursorX,
+                cursorY: backend.cursorY,
+                northEnd: backend.northEnd,
+                southEnd: backend.southEnd,
+                westEnd: backend.westEnd,
+                eastEnd: backend.eastEnd,
+            }
+        } else if (activeMode === modeRectDrag) {
+            data = {
+                mode: modeRectDrag,
+                x: rectLeft,
+                y: rectTop,
+                width: rectWidth,
+                height: rectHeight,
+                text: activeMeasurementText(true),
+                cursorX: rectLeft,
+                cursorY: rectTop,
+                northEnd: rectTop,
+                southEnd: rectTop + rectHeight,
+                westEnd: rectLeft,
+                eastEnd: rectLeft + rectWidth,
+            }
+        } else if (activeMode === modeContainerTrace) {
+            data = {
+                mode: modeContainerTrace,
+                x: containerX,
+                y: containerY,
+                width: containerWidth,
+                height: containerHeight,
+                text: activeMeasurementText(true),
+                cursorX: containerX,
+                cursorY: containerY,
+                northEnd: containerY,
+                southEnd: containerY + containerHeight,
+                westEnd: containerX,
+                eastEnd: containerX + containerWidth,
+            }
+        } else {
+            return
+        }
+        backend.addAnnotation(data)
     }
 
     function showStartupHelpOverlay() {
@@ -405,6 +459,30 @@ Window {
     }
 
     Shortcut {
+        sequence: "Ctrl+Z"
+        onActivated: {
+            if (root.sessionMode && hasBackend)
+                backend.removeLastAnnotation()
+        }
+    }
+
+    Shortcut {
+        sequence: "Z"
+        onActivated: {
+            if (root.sessionMode && hasBackend)
+                backend.removeLastAnnotation()
+        }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+Z"
+        onActivated: {
+            if (root.sessionMode && hasBackend)
+                backend.redoAnnotation()
+        }
+    }
+
+    Shortcut {
         sequence: "?"
         onActivated: root.toggleHelpOverlay()
     }
@@ -456,8 +534,12 @@ Window {
 
         onPointerReleased: (x, y, button) => {
             root.updatePointer(x, y)
-            if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
+            if (root.activeMode === modeRectDrag && button === Qt.LeftButton) {
                 root.endRectDrag()
+                if (root.sessionMode && root.rectHasSelection
+                        && root.rectWidth > 2 && root.rectHeight > 2)
+                    root.requestSessionAnnotationPlacement()
+            }
         }
 
         onCopyRequested: {
@@ -474,6 +556,9 @@ Window {
 
         onSessionClickRequested: (x, y) => {
             root.updatePointer(x, y)
+            // Rect drag commits on mouse release, not via click
+            if (root.activeMode === modeRectDrag)
+                return
             if (!root.sessionMode || !root.canAnnotateCurrentMeasurement())
                 return
             root.requestSessionAnnotationPlacement()
@@ -690,5 +775,15 @@ Window {
         labelY: root.labelY
         visible: root.labelVisible
         textValue: root.activeMeasurementText(true)
+    }
+
+    // -----------------------------------------------------------------------
+    // Persistent session annotations
+    // -----------------------------------------------------------------------
+    Repeater {
+        model: hasBackend ? backend.annotations : []
+        delegate: AnnotationItem {
+            z: 5
+        }
     }
 }

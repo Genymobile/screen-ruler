@@ -47,6 +47,14 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 | Left click | Copy current measurement as `W × H px` to clipboard, then quit |
 | Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
 
+**Session mode controls** *(active after pressing `Tab`)*
+
+| Input | Action |
+|---|---|
+| Left click | Place persistent annotation at cursor position |
+| `Ctrl+Z` or `Z` | Undo last annotation |
+| `Ctrl+Shift+Z` | Redo last undone annotation |
+
 On launch, a lightweight shortcut overlay is shown briefly and fades automatically; press `?` or `H` any time to bring it back.
 
 ## Build a standalone executable
