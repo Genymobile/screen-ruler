@@ -613,3 +613,42 @@ class TestAnnotationModel:
         backend.annotationsChanged.connect(lambda: received.append(1))
         backend.redoAnnotation()
         assert len(received) == 0
+
+    def test_annotations_to_markdown_empty_when_no_annotations(self):
+        backend = self._backend()
+        assert backend.annotationsToMarkdown() == ""
+
+    def test_annotations_to_markdown_uses_human_readable_format(self):
+        backend = self._backend()
+        backend.addAnnotation(
+            self._sample(
+                text="48 × 32 px",
+                mode=0,
+                cursorX=412,
+                cursorY=230,
+            )
+        )
+        backend.addAnnotation(
+            self._sample(
+                text="320 × 200 px",
+                mode=2,
+                cursorX=100,
+                cursorY=80,
+            )
+        )
+        markdown = backend.annotationsToMarkdown()
+        assert markdown == (
+            "- Crosshair @ (412, 230): 48 × 32 px\n"
+            "- Container @ (100, 80): 320 × 200 px"
+        )
+
+    def test_copy_annotations_markdown_to_clipboard_uses_exported_text(self, monkeypatch):
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="A"))
+
+        copied = []
+        monkeypatch.setattr(backend, "_copy_text_to_clipboard", lambda text: copied.append(text))
+
+        backend.copyAnnotationsMarkdownToClipboard()
+
+        assert copied == [backend.annotationsToMarkdown()]

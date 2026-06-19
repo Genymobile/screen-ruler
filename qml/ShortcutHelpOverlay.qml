@@ -40,7 +40,7 @@ Rectangle {
 
         Text {
             text: root.sessionMode
-                  ? "Ctrl+C — reserved for session export"
+                  ? "Ctrl+C — copy all annotations as Markdown"
                   : "Ctrl+C — copy measurement, then quit"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize

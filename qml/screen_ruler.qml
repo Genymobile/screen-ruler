@@ -516,8 +516,10 @@ Window {
             root.clearPendingDestructiveAction()
             if (!hasBackend)
                 return
-            if (root.sessionMode)
+            if (root.sessionMode) {
+                backend.copyAnnotationsMarkdownToClipboard()
                 return
+            }
             if (!root.canCopyCurrentMeasurement())
                 return
             backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))

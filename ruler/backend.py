@@ -418,8 +418,51 @@ class RulerBackend(QObject):
         if changed:
             self.annotationsChanged.emit()
 
-    @pyqtSlot(str)
-    def copyTextToClipboardAndQuit(self, text: str) -> None:
+    @staticmethod
+    def _format_number(value: object) -> str:
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return "?"
+        if num.is_integer():
+            return str(int(num))
+        return f"{num:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _annotation_mode_title(mode: object) -> str:
+        labels = {
+            0: "Crosshair",
+            1: "Rectangle",
+            2: "Container",
+        }
+        return labels.get(mode, str(mode))
+
+    @staticmethod
+    def _format_coordinate(value: object) -> str:
+        try:
+            return str(int(round(float(value))))
+        except (TypeError, ValueError):
+            return "?"
+
+    @pyqtSlot(result=str)
+    def annotationsToMarkdown(self) -> str:
+        if not self._annotations:
+            return ""
+
+        lines: list[str] = []
+        for annotation in self._annotations:
+            mode = self._annotation_mode_title(annotation.get("mode"))
+            measurement = str(annotation.get("text", "")).strip()
+            if not measurement:
+                width = self._format_number(annotation.get("width"))
+                height = self._format_number(annotation.get("height"))
+                measurement = f"{width} × {height} px"
+            x = self._format_coordinate(annotation.get("cursorX", annotation.get("x")))
+            y = self._format_coordinate(annotation.get("cursorY", annotation.get("y")))
+            lines.append(f"- {mode} @ ({x}, {y}): {measurement}")
+        return "\n".join(lines)
+
+    def _copy_text_to_clipboard(self, text: str) -> None:
         text = str(text)
 
         clipboard = QGuiApplication.clipboard()
@@ -439,4 +482,11 @@ class RulerBackend(QObject):
             except Exception:
                 pass
 
+    @pyqtSlot()
+    def copyAnnotationsMarkdownToClipboard(self) -> None:
+        self._copy_text_to_clipboard(self.annotationsToMarkdown())
+
+    @pyqtSlot(str)
+    def copyTextToClipboardAndQuit(self, text: str) -> None:
+        self._copy_text_to_clipboard(text)
         QTimer.singleShot(120, QGuiApplication.quit)

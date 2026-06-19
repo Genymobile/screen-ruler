@@ -40,7 +40,7 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 |---|---|
 | `1` / `2` / `3` | Switch measurement mode |
 | `Tab` | Toggle session mode (persistent annotation workspace) |
-| `Ctrl+C` | Copy current measurement to clipboard, then quit |
+| `Ctrl+C` | Copy current measurement to clipboard, then quit (quick mode) |
 | `?` or `H` | Toggle the shortcut help overlay |
 | `Escape` | Exit session mode (or quit when not in session mode) |
 | `Q` | Quit |
@@ -52,6 +52,7 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 | Input | Action |
 |---|---|
 | Left click | Place persistent annotation at cursor position |
+| `Ctrl+C` | Copy all annotations as a Markdown list |
 | `Ctrl+Z` or `Z` | Undo last annotation |
 | `Ctrl+Shift+Z` | Redo last undone annotation |
 

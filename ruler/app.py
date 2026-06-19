@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
             "Keyboard shortcuts:\n"
             "  - 1 / 2 / 3: switch measurement mode\n"
             "  - Tab: toggle session mode\n"
-            "  - Ctrl+C: copy measurement to clipboard and quit\n"
+            "  - Ctrl+C: copy measurement and quit (quick) / export session annotations as Markdown\n"
             "  - Ctrl+Z / Z: undo last annotation (session mode)\n"
             "  - Ctrl+Shift+Z: redo annotation (session mode)\n"
             "  - ? / H: toggle shortcut overlay\n"
