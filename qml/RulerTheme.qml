@@ -47,4 +47,15 @@ QtObject {
 
     readonly property int sensitivitySliderWidth: 240
     readonly property int sensitivityDefaultValue: 85
+
+    // Session mode UI defaults
+    readonly property color sessionModeBadgeColor: accentColor
+    readonly property real sessionModeBadgeOpacity: 0.92
+    readonly property int sessionModeBadgeHorizontalPadding: 14
+    readonly property int sessionModeBadgeVerticalPadding: 8
+    readonly property int sessionModeBorderThickness: 5
+    readonly property color sessionModeBorderColor: accentColor
+    readonly property real sessionModeBorderBaseOpacity: 0.85
+    readonly property real sessionModeBorderNearOpacity: 0.1
+    readonly property int sessionModeBorderFadeDistance: 100
 }

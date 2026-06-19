@@ -5,6 +5,7 @@ Rectangle {
 
     required property bool overlayVisible
     required property real overlayOpacity
+    required property bool sessionMode
 
     width: RulerTheme.controlsPanelWidth
     height: helpOverlayContent.implicitHeight + 2 * RulerTheme.helpOverlayVerticalPadding
@@ -38,13 +39,38 @@ Rectangle {
         }
 
         Text {
-            text: "Ctrl+C — copy measurement, then quit"
+            text: root.sessionMode
+                  ? "Ctrl+C — reserved for session export"
+                  : "Ctrl+C — copy measurement, then quit"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
 
         Text {
-            text: "Esc / Q — quit"
+            text: root.sessionMode
+                  ? "Click — place annotation (persistent)"
+                  : "Click — copy measurement, then quit"
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+        }
+
+        Text {
+            text: "Tab — toggle session mode"
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+        }
+
+        Text {
+            text: root.sessionMode
+                  ? "Tab / Esc — exit session mode"
+                  : "Esc / Q — quit"
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+        }
+
+        Text {
+            text: root.sessionMode ? "Q — quit app" : ""
+            visible: root.sessionMode
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }

@@ -22,7 +22,7 @@ TIMER_INTERVAL_MS = 16
 
 
 class QuitKeysEventFilter(QObject):
-    """Catch Esc/Q at app level when WM focus is unreliable on X11 overlays."""
+    """Catch Q at app level when WM focus is unreliable on X11 overlays."""
 
     def eventFilter(self, _obj: QObject, event: QEvent) -> bool:
         if event.type() != QEvent.Type.KeyPress:
@@ -31,7 +31,7 @@ class QuitKeysEventFilter(QObject):
             return False
 
         key = event.key()
-        if key in (Qt.Key.Key_Escape, Qt.Key.Key_Q):
+        if key == Qt.Key.Key_Q:
             QGuiApplication.quit()
             return True
         return False
@@ -49,9 +49,11 @@ def parse_args() -> argparse.Namespace:
             "  - Mouse wheel: adjust sensitivity\n"
             "Keyboard shortcuts:\n"
             "  - 1 / 2 / 3: switch measurement mode\n"
+            "  - Tab: toggle session mode\n"
             "  - Ctrl+C: copy measurement to clipboard and quit\n"
             "  - ? / H: toggle shortcut overlay\n"
-            "  - Esc / Q: quit"
+            "  - Esc: exit session mode or quit\n"
+            "  - Q: quit"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )

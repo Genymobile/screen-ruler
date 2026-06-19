@@ -4,11 +4,13 @@ Item {
     required property int activeMode
     required property int modeRectDrag
     required property bool canCopy
+    required property bool sessionMode
 
     signal pointerPressed(real x, real y, int button)
     signal pointerMoved(real x, real y)
     signal pointerReleased(real x, real y, int button)
     signal copyRequested()
+    signal sessionClickRequested(real x, real y)
     signal wheelAdjusted(real deltaY)
 
     anchors.fill: parent
@@ -34,6 +36,11 @@ Item {
         }
 
         onClicked: (mouse) => {
+            if (sessionMode) {
+                sessionClickRequested(mouse.x, mouse.y)
+                mouse.accepted = true
+                return
+            }
             if (!canCopy) {
                 mouse.accepted = true
                 return

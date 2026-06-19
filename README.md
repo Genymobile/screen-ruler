@@ -39,9 +39,11 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 | Input | Action |
 |---|---|
 | `1` / `2` / `3` | Switch measurement mode |
+| `Tab` | Toggle session mode (persistent annotation workspace) |
 | `Ctrl+C` | Copy current measurement to clipboard, then quit |
 | `?` or `H` | Toggle the shortcut help overlay |
-| `Escape` or `Q` | Quit |
+| `Escape` | Exit session mode (or quit when not in session mode) |
+| `Q` | Quit |
 | Left click | Copy current measurement as `W × H px` to clipboard, then quit |
 | Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
 

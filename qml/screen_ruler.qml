@@ -48,6 +48,7 @@ Window {
     property bool startupHelpActive: false
     property bool suppressNextCopyRequest: false
     property real helpOverlayOpacity: 0.0
+    property bool sessionMode: false
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
@@ -69,6 +70,41 @@ Window {
         } else {
             refreshContainerSelection()
         }
+    }
+
+    readonly property real sessionBorderProximity: Math.max(
+        0,
+        Math.min(pointerX, pointerY, width - pointerX, height - pointerY)
+    )
+    readonly property real sessionBorderOpacity: {
+        if (!sessionMode)
+            return 0
+        var half = RulerTheme.sessionModeBorderFadeDistance / 2
+        if (sessionBorderProximity >= RulerTheme.sessionModeBorderFadeDistance)
+            return RulerTheme.sessionModeBorderBaseOpacity
+        if (sessionBorderProximity <= half)
+            return RulerTheme.sessionModeBorderNearOpacity
+        var t = (sessionBorderProximity - half) / half
+        return RulerTheme.sessionModeBorderNearOpacity
+                + t * (RulerTheme.sessionModeBorderBaseOpacity - RulerTheme.sessionModeBorderNearOpacity)
+    }
+
+    function setSessionMode(enabled) {
+        if (sessionMode === enabled)
+            return
+        sessionMode = enabled
+    }
+
+    function toggleSessionMode() {
+        setSessionMode(!sessionMode)
+    }
+
+    function handleEscapeAction() {
+        if (sessionMode) {
+            setSessionMode(false)
+            return
+        }
+        Qt.quit()
     }
 
     function updatePointer(x, y) {
@@ -213,6 +249,17 @@ Window {
                || (activeMode === modeContainerTrace && containerHasSelection)
     }
 
+    function canAnnotateCurrentMeasurement() {
+        if (activeMode === modeRectDrag)
+            return rectHasSelection
+        if (activeMode === modeContainerTrace)
+            return containerHasSelection
+        return hasBackend && backend.cursorX >= 0
+    }
+
+    function requestSessionAnnotationPlacement() {
+    }
+
     function showStartupHelpOverlay() {
         startupHelpActive = true
         helpOverlayVisible = true
@@ -298,7 +345,7 @@ Window {
 
     // Frameless, always-on-top, transparent overlay.
     // On X11 use bypass hint to avoid WM work-area insets (panels/docks).
-    // Esc/Q reliability is preserved by an app-level key filter in Python.
+    // Q reliability is preserved by an app-level key filter in Python.
     flags:  hasBackend && backend.isWaylandSession
             ? (Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
             : (Qt.WindowStaysOnTopHint
@@ -316,7 +363,7 @@ Window {
 
     Shortcut {
         sequence: "Escape"
-        onActivated: Qt.quit()
+        onActivated: root.handleEscapeAction()
     }
 
     Shortcut {
@@ -342,10 +389,19 @@ Window {
     Shortcut {
         sequence: "Ctrl+C"
         onActivated: {
-            if (!hasBackend || !root.canCopyCurrentMeasurement())
+            if (!hasBackend)
+                return
+            if (root.sessionMode)
+                return
+            if (!root.canCopyCurrentMeasurement())
                 return
             backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
         }
+    }
+
+    Shortcut {
+        sequence: "Tab"
+        onActivated: root.toggleSessionMode()
     }
 
     Shortcut {
@@ -367,19 +423,23 @@ Window {
             root.dismissStartupHelpOverlay()
             if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
                 event.accepted = true
-                Qt.quit()
+                if (event.key === Qt.Key_Escape)
+                    root.handleEscapeAction()
+                else
+                    Qt.quit()
             }
         }
     }
 
     // -----------------------------------------------------------------------
-    // Keyboard handling — Escape or Q exits the application
+    // Keyboard handling — Escape exits session mode (or app), Q exits app.
     // -----------------------------------------------------------------------
     GlobalInputLayer {
         enabled: hasBackend
         activeMode: root.activeMode
         modeRectDrag: root.modeRectDrag
         canCopy: root.canCopyCurrentMeasurement()
+        sessionMode: root.sessionMode
 
         onPointerPressed: (x, y, button) => {
             root.dismissStartupHelpFromPointer()
@@ -405,9 +465,18 @@ Window {
                 root.suppressNextCopyRequest = false
                 return
             }
+            if (root.sessionMode)
+                return
             if (!hasBackend)
                 return
             backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
+        }
+
+        onSessionClickRequested: (x, y) => {
+            root.updatePointer(x, y)
+            if (!root.sessionMode || !root.canAnnotateCurrentMeasurement())
+                return
+            root.requestSessionAnnotationPlacement()
         }
 
         onWheelAdjusted: (deltaY) => {
@@ -470,6 +539,40 @@ Window {
         anchors.rightMargin: RulerTheme.baseMargin
         overlayVisible: root.helpOverlayVisible
         overlayOpacity: root.helpOverlayOpacity
+        sessionMode: root.sessionMode
+    }
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.leftMargin: RulerTheme.baseMargin
+        anchors.topMargin: RulerTheme.baseMargin
+        visible: root.sessionMode
+        z: 40
+        radius: RulerTheme.cornerRadius
+        color: RulerTheme.sessionModeBadgeColor
+        opacity: RulerTheme.sessionModeBadgeOpacity
+        width: sessionModeLabel.implicitWidth + RulerTheme.sessionModeBadgeHorizontalPadding
+        height: sessionModeLabel.implicitHeight + RulerTheme.sessionModeBadgeVerticalPadding
+
+        Text {
+            id: sessionModeLabel
+            anchors.centerIn: parent
+            text: "SESSION"
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+            font.bold: true
+        }
+    }
+
+    Rectangle {
+        visible: root.sessionMode
+        z: 35
+        anchors.fill: parent
+        color: "transparent"
+        border.width: RulerTheme.sessionModeBorderThickness
+        border.color: RulerTheme.sessionModeBorderColor
+        opacity: root.sessionBorderOpacity
     }
 
     Timer {
