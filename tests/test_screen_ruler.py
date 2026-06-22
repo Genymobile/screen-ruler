@@ -652,3 +652,62 @@ class TestAnnotationModel:
         backend.copyAnnotationsMarkdownToClipboard()
 
         assert copied == [backend.annotationsToMarkdown()]
+
+    def test_build_composite_image_for_region_crops_source_image(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        source = QImage(20, 20, QImage.Format.Format_ARGB32)
+        source.fill(QColor("#112233"))
+        edge_map = np.zeros((20, 20), dtype=bool)
+        backend = RulerBackend(
+            edge_map=edge_map,
+            dpr_x=1.0,
+            dpr_y=1.0,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=20,
+            virtual_h=20,
+            source_image=source,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+        cropped = backend.buildCompositeImageForRegion(4, 6, 8, 5)
+
+        assert not cropped.isNull()
+        assert cropped.width() == 8
+        assert cropped.height() == 5
+        assert cropped.pixelColor(0, 0) == QColor("#112233")
+
+    def test_copy_composite_region_to_clipboard_uses_generated_image(self, monkeypatch):
+        from PyQt6.QtGui import QColor, QImage
+
+        source = QImage(20, 20, QImage.Format.Format_ARGB32)
+        source.fill(QColor("#abcdef"))
+        edge_map = np.zeros((20, 20), dtype=bool)
+        backend = RulerBackend(
+            edge_map=edge_map,
+            dpr_x=1.0,
+            dpr_y=1.0,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=20,
+            virtual_h=20,
+            source_image=source,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+        copied_sizes = []
+        monkeypatch.setattr(
+            backend,
+            "_copy_image_to_clipboard",
+            lambda image: copied_sizes.append((image.width(), image.height())),
+        )
+
+        result = backend.copyCompositeRegionToClipboard(2, 3, 7, 4)
+
+        assert result is True
+        assert copied_sizes == [(7, 4)]

@@ -8,8 +8,8 @@ import subprocess
 import cv2
 import numpy as np
 
-from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QClipboard, QCursor, QGuiApplication, QImage
+from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QObject, QPointF, QRect, QRectF, Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QColor, QClipboard, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen
 
 from .core import (
     REGION_CLOSE_KERNEL_SIZE,
@@ -481,6 +481,202 @@ class RulerBackend(QObject):
                 )
             except Exception:
                 pass
+
+    def _copy_image_to_clipboard(self, image: QImage) -> None:
+        if image.isNull():
+            return
+
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setImage(image, QClipboard.Mode.Clipboard)
+            if clipboard.supportsSelection():
+                clipboard.setImage(image, QClipboard.Mode.Selection)
+
+        if self._is_wayland and shutil.which("wl-copy"):
+            try:
+                payload = QByteArray()
+                buffer = QBuffer(payload)
+                buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+                image.save(buffer, "PNG")
+                subprocess.run(
+                    ["wl-copy", "--type", "image/png"],
+                    input=bytes(payload),
+                    check=True,
+                    timeout=1,
+                )
+            except Exception:
+                pass
+
+    @staticmethod
+    def _to_float(value: object, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _local_to_image_x(self, value: object) -> float:
+        return self._to_float(value) * self._dpr_x
+
+    def _local_to_image_y(self, value: object) -> float:
+        return self._to_float(value) * self._dpr_y
+
+    def _draw_annotation_measurement_label(
+        self,
+        painter: QPainter,
+        annotation: dict,
+        crop_left: int,
+        crop_top: int,
+    ) -> None:
+        label_base_margin = 14
+        label_offset_y = 4
+        label_shadow_offset = 2
+        label_horizontal_padding = 18
+        label_vertical_padding = 12
+        corner_radius = 5
+        panel_background = QColor("#1A1A1A")
+        panel_shadow = QColor(0, 0, 0, int(0.22 * 255))
+        text_color = QColor("#FFFFFF")
+
+        mode = int(self._to_float(annotation.get("mode"), 0))
+        if mode == 0:
+            base_x = self._local_to_image_x(annotation.get("cursorX"))
+            base_y = self._local_to_image_y(annotation.get("cursorY"))
+        else:
+            base_x = self._local_to_image_x(annotation.get("x"))
+            base_y = self._local_to_image_y(annotation.get("y"))
+
+        label_x = base_x + label_base_margin * self._dpr_x - crop_left
+        label_y = base_y + label_offset_y * self._dpr_y - crop_top
+        text_value = str(annotation.get("text", "")).strip()
+        if not text_value:
+            text_value = (
+                f"{self._format_number(annotation.get('width'))} × "
+                f"{self._format_number(annotation.get('height'))} px"
+            )
+
+        font = QFont("DejaVu Sans Mono")
+        font.setBold(True)
+        font.setPointSize(13)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        text_width = metrics.horizontalAdvance(text_value)
+        text_height = metrics.height()
+        box_width = text_width + int(label_horizontal_padding * self._dpr_x)
+        box_height = text_height + int(label_vertical_padding * self._dpr_y)
+        shadow_x = label_x + label_shadow_offset * self._dpr_x
+        shadow_y = label_y + label_shadow_offset * self._dpr_y
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(panel_shadow)
+        painter.drawRoundedRect(
+            QRectF(shadow_x, shadow_y, box_width, box_height),
+            corner_radius,
+            corner_radius,
+        )
+
+        painter.setBrush(panel_background)
+        painter.drawRoundedRect(
+            QRectF(label_x, label_y, box_width, box_height),
+            corner_radius,
+            corner_radius,
+        )
+
+        painter.setPen(text_color)
+        text_x = label_x + (box_width - text_width) / 2
+        text_baseline = label_y + (box_height + metrics.ascent() - metrics.descent()) / 2
+        painter.drawText(QPointF(text_x, text_baseline), text_value)
+
+    def _draw_annotation_overlay(
+        self,
+        painter: QPainter,
+        annotation: dict,
+        crop_left: int,
+        crop_top: int,
+    ) -> None:
+        accent = QColor("#E6195E")
+        pen = QPen(accent)
+        pen.setWidth(1)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        mode = int(self._to_float(annotation.get("mode"), 0))
+        if mode == 0:
+            cx = self._local_to_image_x(annotation.get("cursorX")) - crop_left
+            cy = self._local_to_image_y(annotation.get("cursorY")) - crop_top
+            north = self._local_to_image_y(annotation.get("northEnd")) - crop_top
+            south = self._local_to_image_y(annotation.get("southEnd")) - crop_top
+            west = self._local_to_image_x(annotation.get("westEnd")) - crop_left
+            east = self._local_to_image_x(annotation.get("eastEnd")) - crop_left
+            tick = 5 * ((self._dpr_x + self._dpr_y) / 2.0)
+
+            painter.drawLine(QPointF(cx, north), QPointF(cx, south))
+            painter.drawLine(QPointF(west, cy), QPointF(east, cy))
+            painter.drawLine(QPointF(cx - tick, north), QPointF(cx + tick, north))
+            painter.drawLine(QPointF(cx - tick, south), QPointF(cx + tick, south))
+            painter.drawLine(QPointF(west, cy - tick), QPointF(west, cy + tick))
+            painter.drawLine(QPointF(east, cy - tick), QPointF(east, cy + tick))
+        else:
+            x = self._local_to_image_x(annotation.get("x")) - crop_left
+            y = self._local_to_image_y(annotation.get("y")) - crop_top
+            w = max(1.0, self._local_to_image_x(annotation.get("width", 0)))
+            h = max(1.0, self._local_to_image_y(annotation.get("height", 0)))
+            painter.drawRect(QRectF(x, y, w, h))
+
+        self._draw_annotation_measurement_label(painter, annotation, crop_left, crop_top)
+
+    def buildCompositeImageForRegion(
+        self,
+        local_x: float,
+        local_y: float,
+        local_width: float,
+        local_height: float,
+    ) -> QImage:
+        if self._source_image.isNull():
+            return QImage()
+
+        crop_left = int(round(local_x * self._dpr_x))
+        crop_top = int(round(local_y * self._dpr_y))
+        crop_width = int(round(local_width * self._dpr_x))
+        crop_height = int(round(local_height * self._dpr_y))
+        if crop_width <= 0 or crop_height <= 0:
+            return QImage()
+
+        bounds = QRect(0, 0, self._source_image.width(), self._source_image.height())
+        crop = QRect(crop_left, crop_top, crop_width, crop_height).intersected(bounds)
+        if crop.isEmpty():
+            return QImage()
+
+        output = self._source_image.copy(crop)
+        if output.isNull():
+            return QImage()
+
+        painter = QPainter(output)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        for annotation in self._annotations:
+            self._draw_annotation_overlay(
+                painter,
+                annotation,
+                crop.left(),
+                crop.top(),
+            )
+        painter.end()
+        return output
+
+    @pyqtSlot(float, float, float, float, result=bool)
+    def copyCompositeRegionToClipboard(
+        self,
+        local_x: float,
+        local_y: float,
+        local_width: float,
+        local_height: float,
+    ) -> bool:
+        composite = self.buildCompositeImageForRegion(
+            local_x, local_y, local_width, local_height
+        )
+        if composite.isNull():
+            return False
+        self._copy_image_to_clipboard(composite)
+        return True
 
     @pyqtSlot()
     def copyAnnotationsMarkdownToClipboard(self) -> None:
