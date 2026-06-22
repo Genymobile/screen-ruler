@@ -21,6 +21,7 @@ a = Analysis(
         ('qml/SelectionOutline.qml', 'qml'),
         ('qml/GlobalInputLayer.qml', 'qml'),
         ('qml/OverlayActionButton.qml', 'qml'),
+        ('qml/OverlayMessageBubble.qml', 'qml'),
         ('qml/ModeIconButton.qml', 'qml'),
         ('qml/ModeSelector.qml', 'qml'),
         ('qml/LabeledSliderRow.qml', 'qml'),

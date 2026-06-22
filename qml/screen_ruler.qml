@@ -884,73 +884,37 @@ Window {
         }
     }
 
-    Rectangle {
-        anchors.left: sessionModeBadge.left
-        anchors.top: sessionModeBadge.bottom
-        anchors.topMargin: 8
-        visible: root.sessionMode && root.sessionActionFeedbackMessage !== ""
-        z: 41
-        radius: RulerTheme.cornerRadius
-        color: RulerTheme.panelBackgroundColor
-        opacity: RulerTheme.panelOpacity
-        width: sessionActionFeedbackLabel.implicitWidth + 20
-        height: sessionActionFeedbackLabel.implicitHeight + 12
-
-        Text {
-            id: sessionActionFeedbackLabel
-            anchors.centerIn: parent
-            text: root.sessionActionFeedbackMessage
-            color: RulerTheme.primaryTextColor
-            font.pointSize: RulerTheme.controlsValuePointSize
-            font.bold: true
-        }
-    }
-
-    Rectangle {
+    OverlayMessageBubble {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
-        visible: root.sessionMode && root.pendingDestructiveMessage !== ""
+        anchors.verticalCenterOffset: root.pendingDestructiveMessage !== "" ? 44 : 0
+        bubbleVisible: root.sessionMode && root.sessionActionFeedbackMessage !== ""
         z: 45
-        radius: RulerTheme.cornerRadius + 2
-        color: RulerTheme.panelBackgroundColor
-        opacity: 0.95
-        border.width: 2
-        border.color: RulerTheme.sessionModeBorderColor
-        width: Math.min(parent.width - 80, destructiveHintLabel.implicitWidth + 48)
-        height: destructiveHintLabel.implicitHeight + 28
-
-        Text {
-            id: destructiveHintLabel
-            anchors.centerIn: parent
-            text: root.pendingDestructiveMessage
-            color: RulerTheme.primaryTextColor
-            font.pointSize: RulerTheme.controlsTitlePointSize + 4
-            font.bold: true
-        }
+        maxWidth: parent.width - 80
+        textPointSize: RulerTheme.controlsTitlePointSize + 2
+        textValue: root.sessionActionFeedbackMessage
     }
 
-    Rectangle {
+    OverlayMessageBubble {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        bubbleVisible: root.sessionMode && root.pendingDestructiveMessage !== ""
+        z: 45
+        maxWidth: parent.width - 80
+        textPointSize: RulerTheme.controlsTitlePointSize + 4
+        textValue: root.pendingDestructiveMessage
+    }
+
+    OverlayMessageBubble {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: RulerTheme.baseMargin + 44
-        visible: root.exportSelectionActive
+        bubbleVisible: root.exportSelectionActive
         z: 45
-        radius: RulerTheme.cornerRadius + 2
-        color: RulerTheme.panelBackgroundColor
-        opacity: 0.95
-        border.width: 2
-        border.color: RulerTheme.sessionModeBorderColor
-        width: Math.min(parent.width - 80, exportHintLabel.implicitWidth + 48)
-        height: exportHintLabel.implicitHeight + 18
-
-        Text {
-            id: exportHintLabel
-            anchors.centerIn: parent
-            text: "Composite export: drag a rectangle to copy image to clipboard"
-            color: RulerTheme.primaryTextColor
-            font.pointSize: RulerTheme.controlsValuePointSize + 2
-            font.bold: true
-        }
+        maxWidth: parent.width - 80
+        textPointSize: RulerTheme.controlsValuePointSize + 2
+        verticalPadding: 9
+        textValue: "Composite export: drag a rectangle to copy image to clipboard"
     }
 
     Rectangle {
