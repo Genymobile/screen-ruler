@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
             "  - Ctrl+C: copy measurement and quit (quick) / export session annotations as Markdown\n"
             "  - Ctrl+Z / Z: undo last annotation (session mode)\n"
             "  - Ctrl+Shift+Z: redo annotation (session mode)\n"
+            "  - Ctrl+Shift+C: start composite export mode, then drag a region (session mode)\n"
             "  - ? / H: toggle shortcut overlay\n"
             "  - Esc: exit session mode or quit\n"
             "  - Q: quit"

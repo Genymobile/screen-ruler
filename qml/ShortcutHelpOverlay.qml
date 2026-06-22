@@ -90,6 +90,13 @@ Rectangle {
         }
 
         Text {
+            text: "Ctrl+Shift+C — start composite export, then drag region"
+            visible: root.sessionMode
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+        }
+
+        Text {
             text: "Mouse wheel — adjust sensitivity/snap distance"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize

@@ -20,6 +20,7 @@ a = Analysis(
         ('qml/OverlayImageLayer.qml', 'qml'),
         ('qml/SelectionOutline.qml', 'qml'),
         ('qml/GlobalInputLayer.qml', 'qml'),
+        ('qml/OverlayActionButton.qml', 'qml'),
         ('qml/ModeIconButton.qml', 'qml'),
         ('qml/ModeSelector.qml', 'qml'),
         ('qml/LabeledSliderRow.qml', 'qml'),

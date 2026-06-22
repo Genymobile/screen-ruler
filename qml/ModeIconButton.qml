@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 
-Button {
+OverlayActionButton {
     id: root
 
     required property int modeIndex
@@ -10,21 +10,22 @@ Button {
     signal modeSelected(int mode)
     readonly property bool isActive: activeMode === modeIndex
 
-    width: RulerTheme.modeButtonSize
-    height: RulerTheme.modeButtonSize
-    focusPolicy: Qt.StrongFocus
+    implicitWidth: RulerTheme.modeButtonSize
+    implicitHeight: RulerTheme.modeButtonSize
+    tooltipText: modeIndex === 0 ? "Crosshair" : (modeIndex === 1 ? "Drag rectangle" : "Container detection")
+    baseBgColor: RulerTheme.modeButtonBgColor
+    hoverBgColor: RulerTheme.modeButtonHoverBgColor
+    pressedBgColor: RulerTheme.modeButtonPressedBgColor
+    activeBgColor: RulerTheme.modeButtonActiveBgColor
+    baseBorderColor: RulerTheme.modeButtonBorderColor
+    hoverBorderColor: RulerTheme.modeButtonHoverBorderColor
+    pressedBorderColor: RulerTheme.modeButtonPressedBorderColor
+    activeBorderColor: RulerTheme.accentColor
 
     onClicked: {
         if (isActive)
             return
         modeSelected(modeIndex)
-    }
-
-    background: Rectangle {
-        radius: RulerTheme.modeButtonRadius
-        color: root.isActive ? RulerTheme.modeButtonActiveBgColor : RulerTheme.modeButtonBgColor
-        border.width: 1
-        border.color: root.isActive ? RulerTheme.accentColor : RulerTheme.modeButtonBorderColor
     }
 
     contentItem: Canvas {
@@ -33,7 +34,9 @@ Button {
         onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
-            var iconColor = root.isActive ? RulerTheme.accentColor : RulerTheme.primaryTextColor
+            var iconColor = (root.isActive || root.pressed)
+                    ? RulerTheme.accentColor
+                    : RulerTheme.primaryTextColor
 
             ctx.strokeStyle = iconColor
             ctx.fillStyle = iconColor
@@ -79,9 +82,9 @@ Button {
         Connections {
             target: root
             function onIsActiveChanged() { root.contentItem.requestPaint() }
+            function onHoveredChanged() { root.contentItem.requestPaint() }
+            function onPressedChanged() { root.contentItem.requestPaint() }
         }
     }
 
-    ToolTip.visible: hovered
-    ToolTip.text: modeIndex === 0 ? "Crosshair" : (modeIndex === 1 ? "Drag rectangle" : "Container detection")
 }

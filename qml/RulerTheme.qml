@@ -43,7 +43,11 @@ QtObject {
     readonly property int modeButtonRadius: 4
     readonly property color modeButtonBorderColor: Qt.rgba(0.52, 0.56, 0.61, 0.5)
     readonly property color modeButtonBgColor: Qt.rgba(0.26, 0.28, 0.31, 0.7)
+    readonly property color modeButtonHoverBgColor: Qt.rgba(0.34, 0.37, 0.42, 0.85)
+    readonly property color modeButtonPressedBgColor: Qt.rgba(0.18, 0.20, 0.24, 0.95)
     readonly property color modeButtonActiveBgColor: Qt.rgba(0.90, 0.10, 0.37, 0.18)
+    readonly property color modeButtonHoverBorderColor: Qt.rgba(0.70, 0.74, 0.78, 0.9)
+    readonly property color modeButtonPressedBorderColor: accentColor
 
     readonly property int sensitivitySliderWidth: 240
     readonly property int sensitivityDefaultValue: 85
