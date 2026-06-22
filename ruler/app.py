@@ -32,6 +32,10 @@ class QuitKeysEventFilter(QObject):
 
         key = event.key()
         if key == Qt.Key.Key_Q:
+            # Let focused QML window handle Q so session-mode confirmation logic
+            # can run; fall back only when no Qt window currently has focus.
+            if QGuiApplication.focusWindow() is not None:
+                return False
             QGuiApplication.quit()
             return True
         return False

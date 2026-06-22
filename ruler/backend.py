@@ -502,7 +502,7 @@ class RulerBackend(QObject):
                     ["wl-copy", "--type", "image/png"],
                     input=bytes(payload),
                     check=True,
-                    timeout=1,
+                    timeout=5,
                 )
             except Exception:
                 pass
@@ -556,7 +556,8 @@ class RulerBackend(QObject):
 
         font = QFont("DejaVu Sans Mono")
         font.setBold(True)
-        font.setPointSize(13)
+        font_scale = max(1.0, (self._dpr_x + self._dpr_y) / 2.0)
+        font.setPixelSize(max(1, int(round(13 * font_scale))))
         painter.setFont(font)
         metrics = QFontMetrics(font)
         text_width = metrics.horizontalAdvance(text_value)

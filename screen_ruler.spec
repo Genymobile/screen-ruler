@@ -27,6 +27,7 @@ a = Analysis(
         ('qml/CrosshairCanvas.qml', 'qml'),
         ('qml/SnappedPointerMarker.qml', 'qml'),
         ('qml/MeasurementLabel.qml', 'qml'),
+        ('qml/AnnotationItem.qml', 'qml'),
         ('qml/ControlsPanel.qml', 'qml'),
         ('qml/ShortcutHelpOverlay.qml', 'qml'),
         ('qml/screen_ruler_format.js', 'qml'),

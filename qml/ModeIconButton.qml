@@ -8,7 +8,7 @@ OverlayActionButton {
     required property int activeMode
 
     signal modeSelected(int mode)
-    readonly property bool isActive: activeMode === modeIndex
+    isActive: activeMode === modeIndex
 
     implicitWidth: RulerTheme.modeButtonSize
     implicitHeight: RulerTheme.modeButtonSize
