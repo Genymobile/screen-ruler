@@ -676,6 +676,36 @@ class TestAnnotationModel:
 
         assert copied == [backend.annotationsToMarkdown()]
 
+    def test_resolve_floating_panel_position_keeps_default_side_when_space_available(self):
+        x, y = RulerBackend._resolve_floating_panel_position(
+            anchor_x=20.0,
+            anchor_y=30.0,
+            box_width=40.0,
+            box_height=20.0,
+            offset_x=14.0,
+            offset_y=4.0,
+            canvas_width=200.0,
+            canvas_height=150.0,
+        )
+
+        assert x == 34.0
+        assert y == 34.0
+
+    def test_resolve_floating_panel_position_flips_when_near_bottom_right(self):
+        x, y = RulerBackend._resolve_floating_panel_position(
+            anchor_x=190.0,
+            anchor_y=145.0,
+            box_width=60.0,
+            box_height=24.0,
+            offset_x=14.0,
+            offset_y=4.0,
+            canvas_width=200.0,
+            canvas_height=150.0,
+        )
+
+        assert x == 116.0
+        assert y == 117.0
+
     def test_build_composite_image_for_region_crops_source_image(self):
         from PyQt6.QtGui import QColor, QImage
 

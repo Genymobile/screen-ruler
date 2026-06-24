@@ -679,6 +679,33 @@ class RulerBackend(QObject):
     def _local_to_image_y(self, value: object) -> float:
         return self._to_float(value) * self._dpr_y
 
+    @staticmethod
+    def _resolve_floating_panel_position(
+        anchor_x: float,
+        anchor_y: float,
+        box_width: float,
+        box_height: float,
+        offset_x: float,
+        offset_y: float,
+        canvas_width: float,
+        canvas_height: float,
+        margin: float = 2.0,
+    ) -> tuple[float, float]:
+        desired_x = anchor_x + offset_x
+        desired_y = anchor_y + offset_y
+
+        if desired_x + box_width <= canvas_width - margin:
+            resolved_x = desired_x
+        else:
+            resolved_x = max(margin, anchor_x - offset_x - box_width)
+
+        if desired_y + box_height <= canvas_height - margin:
+            resolved_y = desired_y
+        else:
+            resolved_y = max(margin, anchor_y - offset_y - box_height)
+
+        return resolved_x, resolved_y
+
     def _draw_annotation_measurement_label(
         self,
         painter: QPainter,
@@ -695,17 +722,15 @@ class RulerBackend(QObject):
         panel_background = QColor("#1A1A1A")
         panel_shadow = QColor(0, 0, 0, int(0.22 * 255))
         text_color = QColor("#FFFFFF")
+        panel_background.setAlphaF(0.9)
 
         mode = int(self._to_float(annotation.get("mode"), 0))
         if mode == 0:
-            base_x = self._local_to_image_x(annotation.get("cursorX"))
-            base_y = self._local_to_image_y(annotation.get("cursorY"))
+            anchor_x = self._local_to_image_x(annotation.get("cursorX"))
+            anchor_y = self._local_to_image_y(annotation.get("cursorY"))
         else:
-            base_x = self._local_to_image_x(annotation.get("x"))
-            base_y = self._local_to_image_y(annotation.get("y"))
-
-        label_x = base_x + label_base_margin * self._dpr_x - crop_left
-        label_y = base_y + label_offset_y * self._dpr_y - crop_top
+            anchor_x = self._local_to_image_x(annotation.get("x"))
+            anchor_y = self._local_to_image_y(annotation.get("y"))
         text_value = str(annotation.get("text", "")).strip()
         if not text_value:
             text_value = (
@@ -723,6 +748,18 @@ class RulerBackend(QObject):
         text_height = metrics.height()
         box_width = text_width + int(label_horizontal_padding * self._dpr_x)
         box_height = text_height + int(label_vertical_padding * self._dpr_y)
+        label_abs_x, label_abs_y = self._resolve_floating_panel_position(
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            box_width=box_width,
+            box_height=box_height,
+            offset_x=label_base_margin * self._dpr_x,
+            offset_y=label_offset_y * self._dpr_y,
+            canvas_width=self._source_image.width(),
+            canvas_height=self._source_image.height(),
+        )
+        label_x = label_abs_x - crop_left
+        label_y = label_abs_y - crop_top
         shadow_x = label_x + label_shadow_offset * self._dpr_x
         shadow_y = label_y + label_shadow_offset * self._dpr_y
 
@@ -745,6 +782,105 @@ class RulerBackend(QObject):
         text_x = label_x + (box_width - text_width) / 2
         text_baseline = label_y + (box_height + metrics.ascent() - metrics.descent()) / 2
         painter.drawText(QPointF(text_x, text_baseline), text_value)
+
+    def _draw_annotation_color_bubble(
+        self,
+        painter: QPainter,
+        annotation: dict,
+        crop_left: int,
+        crop_top: int,
+    ) -> None:
+        panel_background = QColor("#1A1A1A")
+        panel_background.setAlphaF(0.9)
+        panel_shadow = QColor(0, 0, 0, int(0.22 * 255))
+        text_color = QColor("#FFFFFF")
+
+        scale = max(1.0, (self._dpr_x + self._dpr_y) / 2.0)
+        offset_x = (14 + 8) * self._dpr_x
+        offset_y = (4 + 6) * self._dpr_y
+        shadow_offset = 2 * scale
+        horizontal_padding = 18 * scale
+        vertical_padding = 12 * scale
+        row_spacing = 10 * scale
+        line_spacing = 1 * scale
+        swatch_size = 16 * scale
+        corner_radius = 5 * scale
+
+        anchor_x = self._local_to_image_x(annotation.get("x"))
+        anchor_y = self._local_to_image_y(annotation.get("y"))
+        color_hex = str(annotation.get("colorHex", "#000000")).strip() or "#000000"
+        color_rgb = str(annotation.get("colorRgb", "rgb(0, 0, 0)")).strip() or "rgb(0, 0, 0)"
+        color_hsl = str(annotation.get("colorHsl", "hsl(0, 0%, 0%)")).strip() or "hsl(0, 0%, 0%)"
+        lines = [color_hex, color_rgb, color_hsl]
+
+        font = QFont("DejaVu Sans Mono")
+        font.setBold(True)
+        font.setPixelSize(max(1, int(round(13 * scale))))
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        text_col_width = max(metrics.horizontalAdvance(line) for line in lines)
+        line_height = metrics.height()
+        text_col_height = line_height * len(lines) + line_spacing * (len(lines) - 1)
+        row_height = max(swatch_size, text_col_height)
+        row_width = swatch_size + row_spacing + text_col_width
+        box_width = row_width + horizontal_padding
+        box_height = row_height + vertical_padding
+
+        bubble_abs_x, bubble_abs_y = self._resolve_floating_panel_position(
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            box_width=box_width,
+            box_height=box_height,
+            offset_x=offset_x,
+            offset_y=offset_y,
+            canvas_width=self._source_image.width(),
+            canvas_height=self._source_image.height(),
+        )
+        bubble_x = bubble_abs_x - crop_left
+        bubble_y = bubble_abs_y - crop_top
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(panel_shadow)
+        painter.drawRoundedRect(
+            QRectF(
+                bubble_x + shadow_offset,
+                bubble_y + shadow_offset,
+                box_width,
+                box_height,
+            ),
+            corner_radius,
+            corner_radius,
+        )
+
+        painter.setBrush(panel_background)
+        painter.drawRoundedRect(
+            QRectF(bubble_x, bubble_y, box_width, box_height),
+            corner_radius,
+            corner_radius,
+        )
+
+        row_left = bubble_x + (box_width - row_width) / 2
+        row_top = bubble_y + (box_height - row_height) / 2
+
+        swatch_color = QColor(color_hex)
+        if not swatch_color.isValid():
+            swatch_color = QColor("#000000")
+        painter.fillRect(QRectF(row_left, row_top, swatch_size, swatch_size), swatch_color)
+        painter.setPen(QPen(text_color))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(row_left, row_top, swatch_size, swatch_size))
+
+        painter.setPen(text_color)
+        text_x = row_left + swatch_size + row_spacing
+        text_start_y = row_top + (row_height - text_col_height) / 2
+        for index, line in enumerate(lines):
+            baseline_y = (
+                text_start_y
+                + index * (line_height + line_spacing)
+                + metrics.ascent()
+            )
+            painter.drawText(QPointF(text_x, baseline_y), line)
 
     def _draw_annotation_overlay(
         self,
@@ -784,12 +920,8 @@ class RulerBackend(QObject):
             painter.drawLine(QPointF(x + marker_gap, y), QPointF(x + marker_arm, y))
             painter.drawLine(QPointF(x, y - marker_arm), QPointF(x, y - marker_gap))
             painter.drawLine(QPointF(x, y + marker_gap), QPointF(x, y + marker_arm))
-            swatch_size = max(8.0, 12.0 * ((self._dpr_x + self._dpr_y) / 2.0))
-            swatch_color = QColor(str(annotation.get("colorHex", "#000000")))
-            swatch_x = x + max(6.0, 10.0 * ((self._dpr_x + self._dpr_y) / 2.0))
-            swatch_y = y + max(4.0, 8.0 * ((self._dpr_x + self._dpr_y) / 2.0))
-            painter.fillRect(QRectF(swatch_x, swatch_y, swatch_size, swatch_size), swatch_color)
-            painter.drawRect(QRectF(swatch_x, swatch_y, swatch_size, swatch_size))
+            painter.fillRect(QRectF(x - 1.0, y - 1.0, 3.0, 3.0), accent)
+            self._draw_annotation_color_bubble(painter, annotation, crop_left, crop_top)
         else:
             x = self._local_to_image_x(annotation.get("x")) - crop_left
             y = self._local_to_image_y(annotation.get("y")) - crop_top
@@ -797,7 +929,8 @@ class RulerBackend(QObject):
             h = max(1.0, self._local_to_image_y(annotation.get("height", 0)))
             painter.drawRect(QRectF(x, y, w, h))
 
-        self._draw_annotation_measurement_label(painter, annotation, crop_left, crop_top)
+        if mode != 4:
+            self._draw_annotation_measurement_label(painter, annotation, crop_left, crop_top)
 
     def buildCompositeImageForRegion(
         self,

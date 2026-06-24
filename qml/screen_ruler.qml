@@ -689,20 +689,20 @@ Window {
         return Format.roundedPair(widthPx, heightPx, includeUnit)
     }
 
-    readonly property real labelX: isRectSelectionMode(activeMode)
-                                            ? rectLeft + RulerTheme.baseMargin
-                                            : (activeMode === modeContainerTrace
-                                                ? containerX + RulerTheme.baseMargin
-                                                : (activeMode === modeColorPicker
-                                                    ? sampledColorX + RulerTheme.baseMargin + 18
-                                                    : (hasBackend ? backend.cursorX : -RulerTheme.baseMargin) + RulerTheme.baseMargin))
-    readonly property real labelY: isRectSelectionMode(activeMode)
-                                            ? rectTop + RulerTheme.labelOffsetY
-                                            : (activeMode === modeContainerTrace
-                                                ? containerY + RulerTheme.labelOffsetY
-                                                : (activeMode === modeColorPicker
-                                                    ? sampledColorY + RulerTheme.labelOffsetY
-                                                    : (hasBackend ? backend.cursorY : -RulerTheme.labelOffsetY) + RulerTheme.labelOffsetY))
+    readonly property real labelAnchorX: isRectSelectionMode(activeMode)
+                                                 ? rectLeft
+                                                 : (activeMode === modeContainerTrace
+                                                     ? containerX
+                                                     : (activeMode === modeColorPicker
+                                                         ? sampledColorX
+                                                         : (hasBackend ? backend.cursorX : 0)))
+    readonly property real labelAnchorY: isRectSelectionMode(activeMode)
+                                                 ? rectTop
+                                                 : (activeMode === modeContainerTrace
+                                                     ? containerY
+                                                     : (activeMode === modeColorPicker
+                                                         ? sampledColorY
+                                                         : (hasBackend ? backend.cursorY : 0)))
     readonly property bool labelVisible: isRectSelectionMode(activeMode)
                                                   ? rectHasSelection
                                                   : (activeMode === modeContainerTrace
@@ -1320,8 +1320,8 @@ Window {
     }
 
     ColorSampleBubble {
-        bubbleX: root.sampledColorX + RulerTheme.baseMargin + 8
-        bubbleY: root.sampledColorY + RulerTheme.labelOffsetY + 6
+        anchorX: root.sampledColorX
+        anchorY: root.sampledColorY
         swatchColor: Qt.rgba(
                          Math.max(0, Math.min(255, root.sampledColorR)) / 255.0,
                          Math.max(0, Math.min(255, root.sampledColorG)) / 255.0,
@@ -1339,8 +1339,8 @@ Window {
     // Measurement label — semi-transparent box, positioned near cursor
     // -----------------------------------------------------------------------
     MeasurementLabel {
-        labelX: root.labelX
-        labelY: root.labelY
+        anchorX: root.labelAnchorX
+        anchorY: root.labelAnchorY
         visible: root.labelVisible
                  && root.activeMode !== modeColorPicker
                  && !root.exportSelectionActive

@@ -1,17 +1,34 @@
 import QtQuick
+import "floating_panel_position.js" as FloatingPanelPosition
 
 Item {
     id: root
 
-    required property real bubbleX
-    required property real bubbleY
+    required property real anchorX
+    required property real anchorY
+    property real offsetX: RulerTheme.baseMargin + 8
+    property real offsetY: RulerTheme.labelOffsetY + 6
     required property color swatchColor
     required property string hexText
     required property string rgbText
     required property string hslText
+    readonly property real margin: 2
+    readonly property var resolvedPosition: FloatingPanelPosition.resolveFloatingPanelPosition(
+        anchorX,
+        anchorY,
+        bubbleBackground.width,
+        bubbleBackground.height,
+        offsetX,
+        offsetY,
+        parent ? parent.width : width,
+        parent ? parent.height : height,
+        margin
+    )
+    readonly property real resolvedX: resolvedPosition.x
+    readonly property real resolvedY: resolvedPosition.y
 
-    x: bubbleX
-    y: bubbleY
+    x: resolvedX
+    y: resolvedY
     width: bubbleBackground.width
     height: bubbleBackground.height
 

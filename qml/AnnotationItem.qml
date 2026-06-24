@@ -64,8 +64,8 @@ Item {
     }
 
     ColorSampleBubble {
-        bubbleX: modelData.x + RulerTheme.baseMargin + 8
-        bubbleY: modelData.y + RulerTheme.labelOffsetY + 6
+        anchorX: modelData.x
+        anchorY: modelData.y
         swatchColor: modelData.colorHex ? modelData.colorHex : "#000000"
         hexText: modelData.colorHex ? modelData.colorHex : "#000000"
         rgbText: modelData.colorRgb ? modelData.colorRgb : "rgb(0, 0, 0)"
@@ -77,8 +77,8 @@ Item {
     // Measurement label — all modes
     // -----------------------------------------------------------------------
     MeasurementLabel {
-        labelX: (modelData.mode === 0 ? modelData.cursorX : modelData.x) + RulerTheme.baseMargin
-        labelY: (modelData.mode === 0 ? modelData.cursorY : modelData.y) + RulerTheme.labelOffsetY
+        anchorX: modelData.mode === 0 ? modelData.cursorX : modelData.x
+        anchorY: modelData.mode === 0 ? modelData.cursorY : modelData.y
         textValue: modelData.text
         visible: modelData.mode !== 4
     }
