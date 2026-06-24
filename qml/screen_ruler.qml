@@ -61,6 +61,7 @@ Window {
     property real helpOverlayOpacity: 0.0
     readonly property bool helpOverlayVisible: helpOverlayTargetVisible || helpOverlayOpacity > 0.01
     property bool sessionMode: false
+    property bool sessionShrinkCommitPending: false
     property int pendingDestructiveKey: -1
     property string pendingDestructiveMessage: ""
     property string sessionActionFeedbackMessage: ""
@@ -101,6 +102,8 @@ Window {
         rectDragActive = false
         rectHasSelection = false
         suppressNextQuickConfirmClick = false
+        sessionShrinkCommitPending = false
+        sessionShrinkCommitTimer.stop()
     }
 
     function hasQuickRectSelectionResult() {
@@ -122,6 +125,11 @@ Window {
         if (!hasQuickRectSelectionResult())
             return
         copyCurrentMeasurementAndQuit()
+    }
+
+    function scheduleSessionShrinkCommit() {
+        sessionShrinkCommitPending = true
+        sessionShrinkCommitTimer.restart()
     }
 
     readonly property real sessionBorderProximity: Math.max(
@@ -313,6 +321,8 @@ Window {
     }
 
     function beginRectDrag() {
+        sessionShrinkCommitPending = false
+        sessionShrinkCommitTimer.stop()
         rectDragActive = true
         rectHasSelection = true
         rectStartX = dragPointerX()
@@ -819,8 +829,12 @@ Window {
                 if (root.activeMode === modeShrinkToFit)
                     root.applyShrinkToFitOnCurrentRect()
                 if (root.sessionMode && root.rectHasSelection
-                        && root.rectWidth > 2 && root.rectHeight > 2)
-                    root.requestSessionAnnotationPlacement()
+                        && root.rectWidth > 2 && root.rectHeight > 2) {
+                    if (root.activeMode === modeShrinkToFit && hadActiveDrag)
+                        root.scheduleSessionShrinkCommit()
+                    else
+                        root.requestSessionAnnotationPlacement()
+                }
                 else if (hadActiveDrag && !root.sessionMode && root.hasQuickRectSelectionResult())
                     root.suppressNextQuickConfirmClick = true
             }
@@ -1069,6 +1083,25 @@ Window {
         interval: root.sessionActionFeedbackMs
         repeat: false
         onTriggered: root.sessionActionFeedbackMessage = ""
+    }
+
+    Timer {
+        id: sessionShrinkCommitTimer
+        interval: RulerTheme.selectionTransitionMs
+        repeat: false
+        onTriggered: {
+            if (!root.sessionShrinkCommitPending)
+                return
+            root.sessionShrinkCommitPending = false
+            if (root.sessionMode
+                    && root.activeMode === modeShrinkToFit
+                    && root.rectHasSelection
+                    && !root.rectDragActive
+                    && root.rectWidth > 2
+                    && root.rectHeight > 2) {
+                root.requestSessionAnnotationPlacement()
+            }
+        }
     }
 
     Timer {
