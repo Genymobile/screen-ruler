@@ -39,11 +39,25 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 | Input | Action |
 |---|---|
 | `1` / `2` / `3` | Switch measurement mode |
-| `Ctrl+C` | Copy current measurement to clipboard, then quit |
+| `Tab` | Toggle session mode (persistent annotation workspace) |
+| `Ctrl+C` | Copy current measurement to clipboard, then quit (quick mode) |
 | `?` or `H` | Toggle the shortcut help overlay |
-| `Escape` or `Q` | Quit |
+| `Escape` | Exit session mode (or quit when not in session mode) |
+| `Q` | Quit |
 | Left click | Copy current measurement as `W × H px` to clipboard, then quit |
 | Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
+
+**Session mode controls** *(active after pressing `Tab`)*
+
+| Input | Action |
+|---|---|
+| Left click | Place persistent annotation at cursor position |
+| `Ctrl+C` | Copy all annotations as a Markdown list |
+| `Ctrl+Z` or `Z` | Undo last annotation |
+| `Ctrl+Shift+Z` | Redo last undone annotation |
+| `Ctrl+Shift+C` | Enter composite export mode, then drag a region to copy a screenshot with annotations (works from any annotation mode) |
+
+Session mode also shows `MD` and `IMG` buttons next to the `SESSION` badge for these two export actions.
 
 On launch, a lightweight shortcut overlay is shown briefly and fades automatically; press `?` or `H` any time to bring it back.
 

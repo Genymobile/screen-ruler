@@ -33,11 +33,22 @@ Window {
     property real rectStartY: 0
     property real rectEndX: 0
     property real rectEndY: 0
+    property bool exportSelectionActive: false
+    property bool exportDragActive: false
+    property bool exportHasSelection: false
+    property real exportStartX: 0
+    property real exportStartY: 0
+    property real exportEndX: 0
+    property real exportEndY: 0
 
     readonly property real rectLeft: Math.min(rectStartX, rectEndX)
     readonly property real rectTop: Math.min(rectStartY, rectEndY)
     readonly property real rectWidth: Math.abs(rectEndX - rectStartX)
     readonly property real rectHeight: Math.abs(rectEndY - rectStartY)
+    readonly property real exportLeft: Math.min(exportStartX, exportEndX)
+    readonly property real exportTop: Math.min(exportStartY, exportEndY)
+    readonly property real exportWidth: Math.abs(exportEndX - exportStartX)
+    readonly property real exportHeight: Math.abs(exportEndY - exportStartY)
     property bool containerHasSelection: false
     property real containerX: 0
     property real containerY: 0
@@ -46,13 +57,20 @@ Window {
     property real rectSnapDistance: 10
     property bool helpOverlayVisible: false
     property bool startupHelpActive: false
-    property bool suppressNextCopyRequest: false
     property real helpOverlayOpacity: 0.0
+    property bool sessionMode: false
+    property int pendingDestructiveKey: -1
+    property string pendingDestructiveMessage: ""
+    property string sessionActionFeedbackMessage: ""
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
+    readonly property int destructiveActionConfirmMs: 1500
+    readonly property int sessionActionFeedbackMs: 1200
 
     function setActiveMode(mode) {
+        clearPendingDestructiveAction()
+        cancelExportSelection()
         var clamped = Math.max(modeDynamicEdge, Math.min(modeContainerTrace, mode))
         if (activeMode === clamped)
             return
@@ -69,6 +87,119 @@ Window {
         } else {
             refreshContainerSelection()
         }
+    }
+
+    readonly property real sessionBorderProximity: Math.max(
+        0,
+        Math.min(pointerX, pointerY, width - pointerX, height - pointerY)
+    )
+    readonly property real sessionBorderOpacity: {
+        if (!sessionMode)
+            return 0
+        var half = RulerTheme.sessionModeBorderFadeDistance / 2
+        if (sessionBorderProximity >= RulerTheme.sessionModeBorderFadeDistance)
+            return RulerTheme.sessionModeBorderBaseOpacity
+        if (sessionBorderProximity <= half)
+            return RulerTheme.sessionModeBorderNearOpacity
+        var t = (sessionBorderProximity - half) / half
+        return RulerTheme.sessionModeBorderNearOpacity
+                + t * (RulerTheme.sessionModeBorderBaseOpacity - RulerTheme.sessionModeBorderNearOpacity)
+    }
+
+    function setSessionMode(enabled) {
+        if (sessionMode === enabled)
+            return
+        clearPendingDestructiveAction()
+        cancelExportSelection()
+        sessionMode = enabled
+        if (!enabled && hasBackend)
+            backend.clearAnnotations()
+    }
+
+    function hasPersistentSessionAnnotations() {
+        return sessionMode && hasBackend && backend.annotationCount > 0
+    }
+
+    function clearPendingDestructiveAction() {
+        pendingDestructiveKey = -1
+        pendingDestructiveMessage = ""
+        destructiveActionTimer.stop()
+    }
+
+    function showSessionActionFeedback(message) {
+        sessionActionFeedbackMessage = message
+        sessionActionFeedbackTimer.restart()
+    }
+
+    function pendingMessageForKey(key) {
+        if (key === Qt.Key_Tab)
+            return "Press Tab again to discard annotations"
+        if (key === Qt.Key_Escape)
+            return "Press Esc again to discard annotations"
+        if (key === Qt.Key_Q)
+            return "Press Q again to discard annotations"
+        return ""
+    }
+
+    function performDestructiveAction(key) {
+        if (key === Qt.Key_Tab) {
+            setSessionMode(false)
+            return
+        }
+        if (key === Qt.Key_Escape) {
+            if (sessionMode) {
+                setSessionMode(false)
+                return
+            }
+            Qt.quit()
+            return
+        }
+        if (key === Qt.Key_Q)
+            Qt.quit()
+    }
+
+    function requestDestructiveAction(key) {
+        if (!hasPersistentSessionAnnotations()) {
+            clearPendingDestructiveAction()
+            performDestructiveAction(key)
+            return
+        }
+
+        if (pendingDestructiveKey === key) {
+            clearPendingDestructiveAction()
+            performDestructiveAction(key)
+            return
+        }
+
+        pendingDestructiveKey = key
+        pendingDestructiveMessage = pendingMessageForKey(key)
+        destructiveActionTimer.restart()
+    }
+
+    function handleTabAction() {
+        if (!sessionMode) {
+            clearPendingDestructiveAction()
+            setSessionMode(true)
+            return
+        }
+        requestDestructiveAction(Qt.Key_Tab)
+    }
+
+    function handleEscapeAction() {
+        if (exportSelectionActive) {
+            cancelExportSelection()
+            return
+        }
+        if (sessionMode) {
+            requestDestructiveAction(Qt.Key_Escape)
+            return
+        }
+        clearPendingDestructiveAction()
+        Qt.quit()
+    }
+
+    function handleQuitAction() {
+        requestDestructiveAction(Qt.Key_Q)
     }
 
     function updatePointer(x, y) {
@@ -169,20 +300,22 @@ Window {
     }
 
     function adjustSensitivityByWheelSteps(notchSteps) {
-        var nextSensitivity = sensitivityRow.sliderValue + notchSteps * sensitivityStep
+        var currentSensitivity = controlsPanel.sensitivitySliderValue
+        var nextSensitivity = currentSensitivity + notchSteps * sensitivityStep
         nextSensitivity = Math.max(sensitivityMin, Math.min(sensitivityMax, nextSensitivity))
-        if (nextSensitivity === sensitivityRow.sliderValue)
+        if (nextSensitivity === currentSensitivity)
             return
-        sensitivityRow.sliderValue = nextSensitivity
+        controlsPanel.sensitivitySliderValue = nextSensitivity
         applySensitivityValue(nextSensitivity)
     }
 
     function adjustSnapDistanceByWheelSteps(notchSteps) {
-        var nextSnap = snapRow.sliderValue + notchSteps * rectSnapStep
+        var currentSnap = controlsPanel.snapSliderValue
+        var nextSnap = currentSnap + notchSteps * rectSnapStep
         nextSnap = Math.max(rectSnapMin, Math.min(rectSnapMax, nextSnap))
-        if (nextSnap === snapRow.sliderValue)
+        if (nextSnap === currentSnap)
             return
-        snapRow.sliderValue = nextSnap
+        controlsPanel.snapSliderValue = nextSnap
         applySnapDistanceValue(nextSnap)
     }
 
@@ -211,6 +344,128 @@ Window {
     function canCopyCurrentMeasurement() {
         return activeMode === modeDynamicEdge
                || (activeMode === modeContainerTrace && containerHasSelection)
+    }
+
+    function canAnnotateCurrentMeasurement() {
+        if (activeMode === modeRectDrag)
+            return rectHasSelection
+        if (activeMode === modeContainerTrace)
+            return containerHasSelection
+        return hasBackend && backend.cursorX >= 0
+    }
+
+    function canExportCompositeRegion() {
+        return hasBackend && exportHasSelection && exportWidth > 2 && exportHeight > 2
+    }
+
+    function beginExportSelection() {
+        exportSelectionActive = true
+        exportDragActive = false
+        exportHasSelection = false
+    }
+
+    function cancelExportSelection() {
+        exportSelectionActive = false
+        exportDragActive = false
+        exportHasSelection = false
+    }
+
+    function handleCompositeExportShortcut() {
+        clearPendingDestructiveAction()
+        if (!sessionMode || !hasBackend)
+            return
+        if (exportSelectionActive) {
+            cancelExportSelection()
+            return
+        }
+        beginExportSelection()
+    }
+
+    function beginExportDrag(x, y) {
+        exportDragActive = true
+        exportHasSelection = true
+        exportStartX = x
+        exportStartY = y
+        exportEndX = x
+        exportEndY = y
+    }
+
+    function updateExportDrag(x, y) {
+        if (!exportDragActive)
+            return
+        exportEndX = x
+        exportEndY = y
+    }
+
+    function finishExportDrag(x, y) {
+        if (!exportDragActive)
+            return
+        exportEndX = x
+        exportEndY = y
+        exportDragActive = false
+    }
+
+    function exportCompositeSelectionToClipboardAndExitMode() {
+        if (!canExportCompositeRegion())
+            return
+        if (backend.copyCompositeRegionToClipboard(exportLeft, exportTop, exportWidth, exportHeight))
+            showSessionActionFeedback("Composite image copied to clipboard")
+        cancelExportSelection()
+    }
+
+    function requestSessionAnnotationPlacement() {
+        if (!hasBackend)
+            return
+        var data = {}
+        if (activeMode === modeDynamicEdge) {
+            data = {
+                mode: modeDynamicEdge,
+                x: backend.cursorX,
+                y: backend.cursorY,
+                width: backend.widthPx,
+                height: backend.heightPx,
+                text: activeMeasurementText(true),
+                cursorX: backend.cursorX,
+                cursorY: backend.cursorY,
+                northEnd: backend.northEnd,
+                southEnd: backend.southEnd,
+                westEnd: backend.westEnd,
+                eastEnd: backend.eastEnd,
+            }
+        } else if (activeMode === modeRectDrag) {
+            data = {
+                mode: modeRectDrag,
+                x: rectLeft,
+                y: rectTop,
+                width: rectWidth,
+                height: rectHeight,
+                text: activeMeasurementText(true),
+                cursorX: rectLeft,
+                cursorY: rectTop,
+                northEnd: rectTop,
+                southEnd: rectTop + rectHeight,
+                westEnd: rectLeft,
+                eastEnd: rectLeft + rectWidth,
+            }
+        } else if (activeMode === modeContainerTrace) {
+            data = {
+                mode: modeContainerTrace,
+                x: containerX,
+                y: containerY,
+                width: containerWidth,
+                height: containerHeight,
+                text: activeMeasurementText(true),
+                cursorX: containerX,
+                cursorY: containerY,
+                northEnd: containerY,
+                southEnd: containerY + containerHeight,
+                westEnd: containerX,
+                eastEnd: containerX + containerWidth,
+            }
+        } else {
+            return
+        }
+        backend.addAnnotation(data)
     }
 
     function showStartupHelpOverlay() {
@@ -249,7 +504,6 @@ Window {
     function dismissStartupHelpFromPointer() {
         if (!startupHelpActive || !helpOverlayVisible)
             return
-        suppressNextCopyRequest = true
         hideHelpOverlay()
     }
 
@@ -298,7 +552,7 @@ Window {
 
     // Frameless, always-on-top, transparent overlay.
     // On X11 use bypass hint to avoid WM work-area insets (panels/docks).
-    // Esc/Q reliability is preserved by an app-level key filter in Python.
+    // Q reliability is preserved by an app-level key filter in Python.
     flags:  hasBackend && backend.isWaylandSession
             ? (Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
             : (Qt.WindowStaysOnTopHint
@@ -316,12 +570,12 @@ Window {
 
     Shortcut {
         sequence: "Escape"
-        onActivated: Qt.quit()
+        onActivated: root.handleEscapeAction()
     }
 
     Shortcut {
         sequence: "Q"
-        onActivated: Qt.quit()
+        onActivated: root.handleQuitAction()
     }
 
     Shortcut {
@@ -342,20 +596,70 @@ Window {
     Shortcut {
         sequence: "Ctrl+C"
         onActivated: {
-            if (!hasBackend || !root.canCopyCurrentMeasurement())
+            root.clearPendingDestructiveAction()
+            if (!hasBackend)
+                return
+            if (root.sessionMode) {
+                backend.copyAnnotationsMarkdownToClipboard()
+                return
+            }
+            if (!root.canCopyCurrentMeasurement())
                 return
             backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
         }
     }
 
     Shortcut {
+        sequence: "Tab"
+        onActivated: root.handleTabAction()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Z"
+        onActivated: {
+            root.clearPendingDestructiveAction()
+            if (root.sessionMode && hasBackend)
+                backend.removeLastAnnotation()
+        }
+    }
+
+    Shortcut {
+        sequence: "Z"
+        onActivated: {
+            root.clearPendingDestructiveAction()
+            if (root.sessionMode && hasBackend)
+                backend.removeLastAnnotation()
+        }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+Z"
+        onActivated: {
+            root.clearPendingDestructiveAction()
+            if (root.sessionMode && hasBackend)
+                backend.redoAnnotation()
+        }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+C"
+        onActivated: root.handleCompositeExportShortcut()
+    }
+
+    Shortcut {
         sequence: "?"
-        onActivated: root.toggleHelpOverlay()
+        onActivated: {
+            root.clearPendingDestructiveAction()
+            root.toggleHelpOverlay()
+        }
     }
 
     Shortcut {
         sequence: "H"
-        onActivated: root.toggleHelpOverlay()
+        onActivated: {
+            root.clearPendingDestructiveAction()
+            root.toggleHelpOverlay()
+        }
     }
 
     Item {
@@ -367,50 +671,92 @@ Window {
             root.dismissStartupHelpOverlay()
             if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
                 event.accepted = true
-                Qt.quit()
+                if (event.key === Qt.Key_Escape)
+                    root.handleEscapeAction()
+                else
+                    root.handleQuitAction()
             }
         }
     }
 
     // -----------------------------------------------------------------------
-    // Keyboard handling — Escape or Q exits the application
+    // Keyboard handling — Escape cancels export mode or exits session/app, Q exits app.
     // -----------------------------------------------------------------------
     GlobalInputLayer {
         enabled: hasBackend
         activeMode: root.activeMode
         modeRectDrag: root.modeRectDrag
         canCopy: root.canCopyCurrentMeasurement()
+        sessionMode: root.sessionMode
 
         onPointerPressed: (x, y, button) => {
+            root.clearPendingDestructiveAction()
             root.dismissStartupHelpFromPointer()
             root.updatePointer(x, y)
+            if (root.exportSelectionActive) {
+                if (button === Qt.LeftButton)
+                    root.beginExportDrag(x, y)
+                return
+            }
             if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
                 root.beginRectDrag()
         }
 
         onPointerMoved: (x, y) => {
             root.updatePointer(x, y)
+            if (root.exportSelectionActive) {
+                root.updateExportDrag(x, y)
+                return
+            }
             if (root.activeMode === modeRectDrag)
                 root.updateRectDrag()
         }
 
         onPointerReleased: (x, y, button) => {
             root.updatePointer(x, y)
-            if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
+            if (root.exportSelectionActive) {
+                if (button === Qt.LeftButton) {
+                    root.finishExportDrag(x, y)
+                    root.exportCompositeSelectionToClipboardAndExitMode()
+                }
+                return
+            }
+            if (root.activeMode === modeRectDrag && button === Qt.LeftButton) {
                 root.endRectDrag()
+                if (root.sessionMode && root.rectHasSelection
+                        && root.rectWidth > 2 && root.rectHeight > 2)
+                    root.requestSessionAnnotationPlacement()
+            }
         }
 
         onCopyRequested: {
-            if (root.suppressNextCopyRequest) {
-                root.suppressNextCopyRequest = false
+            root.clearPendingDestructiveAction()
+            if (root.exportSelectionActive)
                 return
-            }
+            if (root.sessionMode)
+                return
             if (!hasBackend)
                 return
             backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
         }
 
+        onSessionClickRequested: (x, y) => {
+            root.clearPendingDestructiveAction()
+            if (root.exportSelectionActive)
+                return
+            root.updatePointer(x, y)
+            // Rect drag commits on mouse release, not via click
+            if (root.activeMode === modeRectDrag)
+                return
+            if (!root.sessionMode || !root.canAnnotateCurrentMeasurement())
+                return
+            root.requestSessionAnnotationPlacement()
+        }
+
         onWheelAdjusted: (deltaY) => {
+            root.clearPendingDestructiveAction()
+            if (root.exportSelectionActive)
+                return
             root.adjustActiveModeSliderByWheel(deltaY)
         }
     }
@@ -433,10 +779,18 @@ Window {
         rectSnapStep: root.rectSnapStep
         rectSnapDistance: root.rectSnapDistance
 
-        onPanelPressed: root.dismissStartupHelpOverlay()
+        onPanelPressed: { root.clearPendingDestructiveAction(); root.dismissStartupHelpOverlay() }
         onModeSelected: (mode) => { root.dismissStartupHelpOverlay(); root.setActiveMode(mode) }
-        onSensitivityMoved: (value) => { root.dismissStartupHelpOverlay(); root.applySensitivityValue(value) }
-        onSnapMoved: (value) => { root.dismissStartupHelpOverlay(); root.applySnapDistanceValue(value) }
+        onSensitivityMoved: (value) => {
+            root.clearPendingDestructiveAction()
+            root.dismissStartupHelpOverlay()
+            root.applySensitivityValue(value)
+        }
+        onSnapMoved: (value) => {
+            root.clearPendingDestructiveAction()
+            root.dismissStartupHelpOverlay()
+            root.applySnapDistanceValue(value)
+        }
     }
 
     Connections {
@@ -470,6 +824,121 @@ Window {
         anchors.rightMargin: RulerTheme.baseMargin
         overlayVisible: root.helpOverlayVisible
         overlayOpacity: root.helpOverlayOpacity
+        sessionMode: root.sessionMode
+    }
+
+    Rectangle {
+        id: sessionModeBadge
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.leftMargin: RulerTheme.baseMargin
+        anchors.topMargin: RulerTheme.baseMargin
+        visible: root.sessionMode
+        z: 40
+        radius: RulerTheme.cornerRadius
+        color: RulerTheme.sessionModeBadgeColor
+        opacity: RulerTheme.sessionModeBadgeOpacity
+        width: sessionModeLabel.implicitWidth + RulerTheme.sessionModeBadgeHorizontalPadding
+        height: sessionModeLabel.implicitHeight + RulerTheme.sessionModeBadgeVerticalPadding
+
+        Text {
+            id: sessionModeLabel
+            anchors.centerIn: parent
+            text: "SESSION"
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+            font.bold: true
+        }
+    }
+
+    Row {
+        anchors.left: sessionModeBadge.right
+        anchors.leftMargin: 8
+        anchors.verticalCenter: sessionModeBadge.verticalCenter
+        visible: root.sessionMode
+        spacing: 6
+        z: 40
+
+        OverlayActionButton {
+            implicitWidth: 46
+            implicitHeight: sessionModeBadge.height
+            labelText: "MD"
+            tooltipText: "Copy annotations as Markdown"
+            isActive: false
+            onClicked: {
+                root.clearPendingDestructiveAction()
+                if (root.sessionMode && hasBackend) {
+                    backend.copyAnnotationsMarkdownToClipboard()
+                    root.showSessionActionFeedback("Markdown copied to clipboard")
+                }
+            }
+        }
+
+        OverlayActionButton {
+            implicitWidth: 52
+            implicitHeight: sessionModeBadge.height
+            labelText: "IMG"
+            tooltipText: "Copy annotations as image"
+            isActive: root.exportSelectionActive
+            onClicked: root.handleCompositeExportShortcut()
+        }
+    }
+
+    OverlayMessageBubble {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.verticalCenterOffset: root.pendingDestructiveMessage !== "" ? 44 : 0
+        bubbleVisible: root.sessionMode && root.sessionActionFeedbackMessage !== ""
+        z: 45
+        maxWidth: parent.width - 80
+        textPointSize: RulerTheme.controlsTitlePointSize + 2
+        textValue: root.sessionActionFeedbackMessage
+    }
+
+    OverlayMessageBubble {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        bubbleVisible: root.sessionMode && root.pendingDestructiveMessage !== ""
+        z: 45
+        maxWidth: parent.width - 80
+        textPointSize: RulerTheme.controlsTitlePointSize + 4
+        textValue: root.pendingDestructiveMessage
+    }
+
+    OverlayMessageBubble {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: RulerTheme.baseMargin + 44
+        bubbleVisible: root.exportSelectionActive
+        z: 45
+        maxWidth: parent.width - 80
+        textPointSize: RulerTheme.controlsValuePointSize + 2
+        verticalPadding: 9
+        textValue: "Composite export: drag a rectangle to copy image to clipboard"
+    }
+
+    Rectangle {
+        visible: root.sessionMode
+        z: 35
+        anchors.fill: parent
+        color: "transparent"
+        border.width: RulerTheme.sessionModeBorderThickness
+        border.color: RulerTheme.sessionModeBorderColor
+        opacity: root.sessionBorderOpacity
+    }
+
+    Timer {
+        id: destructiveActionTimer
+        interval: root.destructiveActionConfirmMs
+        repeat: false
+        onTriggered: root.clearPendingDestructiveAction()
+    }
+
+    Timer {
+        id: sessionActionFeedbackTimer
+        interval: root.sessionActionFeedbackMs
+        repeat: false
+        onTriggered: root.sessionActionFeedbackMessage = ""
     }
 
     Timer {
@@ -548,7 +1017,7 @@ Window {
     // Crosshair canvas — repainted on every cursor move
     // -----------------------------------------------------------------------
     CrosshairCanvas {
-        visible: root.activeMode === modeDynamicEdge
+        visible: root.activeMode === modeDynamicEdge && !root.exportSelectionActive
         backend: root.backend
     }
 
@@ -558,7 +1027,7 @@ Window {
         y: root.rectTop
         width: root.rectWidth
         height: root.rectHeight
-        visible: root.activeMode === modeRectDrag && root.rectHasSelection
+        visible: root.activeMode === modeRectDrag && root.rectHasSelection && !root.exportSelectionActive
         z: 1
     }
 
@@ -568,14 +1037,24 @@ Window {
         y: root.containerY
         width: root.containerWidth
         height: root.containerHeight
-        visible: root.activeMode === modeContainerTrace && root.containerHasSelection
+        visible: root.activeMode === modeContainerTrace && root.containerHasSelection && !root.exportSelectionActive
         z: 1
+    }
+
+    SelectionOutline {
+        id: exportSelectionRect
+        x: root.exportLeft
+        y: root.exportTop
+        width: root.exportWidth
+        height: root.exportHeight
+        visible: root.exportSelectionActive && root.exportHasSelection
+        z: 9
     }
 
     SnappedPointerMarker {
         markerX: root.snappedPointerX
         markerY: root.snappedPointerY
-        visible: root.activeMode === modeRectDrag && hasBackend
+        visible: root.activeMode === modeRectDrag && hasBackend && !root.exportSelectionActive
         isSnapped: root.snappedPointerIsSnapped
     }
 
@@ -585,7 +1064,17 @@ Window {
     MeasurementLabel {
         labelX: root.labelX
         labelY: root.labelY
-        visible: root.labelVisible
+        visible: root.labelVisible && !root.exportSelectionActive
         textValue: root.activeMeasurementText(true)
+    }
+
+    // -----------------------------------------------------------------------
+    // Persistent session annotations
+    // -----------------------------------------------------------------------
+    Repeater {
+        model: hasBackend ? backend.annotations : []
+        delegate: AnnotationItem {
+            z: 5
+        }
     }
 }

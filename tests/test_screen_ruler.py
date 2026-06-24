@@ -419,3 +419,303 @@ class TestDetectContainerAtPoint:
         assert result["available"] is True
         assert result["x"] >= 20.0
         assert result["width"] < 10.0
+
+
+class TestAnnotationModel:
+    """Tests for the session-mode persistent annotation store."""
+
+    def _backend(self) -> RulerBackend:
+        from PyQt6.QtGui import QImage
+
+        edge_map = np.zeros((20, 20), dtype=bool)
+        source_image = QImage(1, 1, QImage.Format.Format_RGB32)
+        return RulerBackend(
+            edge_map=edge_map,
+            dpr_x=1.0,
+            dpr_y=1.0,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=20,
+            virtual_h=20,
+            source_image=source_image,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+    def _sample(self, **overrides) -> dict:
+        base = {
+            "mode": 0,
+            "x": 10.0,
+            "y": 20.0,
+            "width": 100.0,
+            "height": 50.0,
+            "text": "100 × 50 px",
+            "cursorX": 10.0,
+            "cursorY": 20.0,
+            "northEnd": 5.0,
+            "southEnd": 70.0,
+            "westEnd": 0.0,
+            "eastEnd": 110.0,
+        }
+        base.update(overrides)
+        return base
+
+    def test_initial_annotations_empty(self):
+        backend = self._backend()
+        assert backend.annotations == []
+        assert backend.annotationCount == 0
+
+    def test_add_annotation_increases_count(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample())
+        assert backend.annotationCount == 1
+
+    def test_add_annotation_stores_data(self):
+        backend = self._backend()
+        data = self._sample(text="42 × 8 px", mode=1)
+        backend.addAnnotation(data)
+        stored = backend.annotations[0]
+        assert stored["text"] == "42 × 8 px"
+        assert stored["mode"] == 1
+
+    def test_add_multiple_annotations(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="A"))
+        backend.addAnnotation(self._sample(text="B"))
+        backend.addAnnotation(self._sample(text="C"))
+        assert backend.annotationCount == 3
+        texts = [a["text"] for a in backend.annotations]
+        assert texts == ["A", "B", "C"]
+
+    def test_remove_last_annotation_decreases_count(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample())
+        backend.addAnnotation(self._sample())
+        backend.removeLastAnnotation()
+        assert backend.annotationCount == 1
+
+    def test_remove_last_annotation_removes_correct_item(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="first"))
+        backend.addAnnotation(self._sample(text="second"))
+        backend.removeLastAnnotation()
+        assert backend.annotations[0]["text"] == "first"
+
+    def test_remove_last_on_empty_is_safe(self):
+        backend = self._backend()
+        backend.removeLastAnnotation()  # must not raise
+        assert backend.annotationCount == 0
+
+    def test_clear_annotations_empties_store(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample())
+        backend.addAnnotation(self._sample())
+        backend.clearAnnotations()
+        assert backend.annotations == []
+        assert backend.annotationCount == 0
+
+    def test_clear_annotations_on_empty_is_safe(self):
+        backend = self._backend()
+        backend.clearAnnotations()  # must not raise
+
+    def test_annotations_returns_copy(self):
+        """Mutating the returned list must not affect internal state."""
+        backend = self._backend()
+        backend.addAnnotation(self._sample())
+        copy = backend.annotations
+        copy.clear()
+        assert backend.annotationCount == 1
+
+    def test_annotationsChanged_emitted_on_add(self):
+        backend = self._backend()
+        received = []
+        backend.annotationsChanged.connect(lambda: received.append(1))
+        backend.addAnnotation(self._sample())
+        assert len(received) == 1
+
+    def test_annotationsChanged_emitted_on_remove(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample())
+        received = []
+        backend.annotationsChanged.connect(lambda: received.append(1))
+        backend.removeLastAnnotation()
+        assert len(received) == 1
+
+    def test_annotationsChanged_not_emitted_on_remove_when_empty(self):
+        backend = self._backend()
+        received = []
+        backend.annotationsChanged.connect(lambda: received.append(1))
+        backend.removeLastAnnotation()
+        assert len(received) == 0
+
+    def test_annotationsChanged_emitted_on_clear(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample())
+        received = []
+        backend.annotationsChanged.connect(lambda: received.append(1))
+        backend.clearAnnotations()
+        assert len(received) == 1
+
+    def test_annotationsChanged_not_emitted_on_clear_when_empty(self):
+        backend = self._backend()
+        received = []
+        backend.annotationsChanged.connect(lambda: received.append(1))
+        backend.clearAnnotations()
+        assert len(received) == 0
+
+    def test_redo_restores_undone_annotation(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="A"))
+        backend.removeLastAnnotation()
+        backend.redoAnnotation()
+        assert backend.annotationCount == 1
+        assert backend.annotations[0]["text"] == "A"
+
+    def test_redo_on_empty_stack_is_safe(self):
+        backend = self._backend()
+        backend.redoAnnotation()  # must not raise
+        assert backend.annotationCount == 0
+
+    def test_undo_redo_sequence(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="A"))
+        backend.addAnnotation(self._sample(text="B"))
+        backend.removeLastAnnotation()  # undo B
+        backend.removeLastAnnotation()  # undo A
+        backend.redoAnnotation()        # redo A
+        backend.redoAnnotation()        # redo B
+        texts = [a["text"] for a in backend.annotations]
+        assert texts == ["A", "B"]
+
+    def test_add_clears_redo_stack(self):
+        """Adding a new annotation must discard the redo history."""
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="A"))
+        backend.removeLastAnnotation()  # undo → redo stack has A
+        backend.addAnnotation(self._sample(text="B"))  # should clear redo
+        backend.redoAnnotation()  # nothing to redo
+        assert backend.annotationCount == 1
+        assert backend.annotations[0]["text"] == "B"
+
+    def test_annotationsChanged_emitted_on_redo(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample())
+        backend.removeLastAnnotation()
+        received = []
+        backend.annotationsChanged.connect(lambda: received.append(1))
+        backend.redoAnnotation()
+        assert len(received) == 1
+
+    def test_annotationsChanged_not_emitted_on_redo_when_empty(self):
+        backend = self._backend()
+        received = []
+        backend.annotationsChanged.connect(lambda: received.append(1))
+        backend.redoAnnotation()
+        assert len(received) == 0
+
+    def test_annotations_to_markdown_empty_when_no_annotations(self):
+        backend = self._backend()
+        assert backend.annotationsToMarkdown() == ""
+
+    def test_annotations_to_markdown_uses_human_readable_format(self):
+        backend = self._backend()
+        backend.addAnnotation(
+            self._sample(
+                text="48 × 32 px",
+                mode=0,
+                cursorX=412,
+                cursorY=230,
+            )
+        )
+        backend.addAnnotation(
+            self._sample(
+                text="320 × 200 px",
+                mode=2,
+                cursorX=100,
+                cursorY=80,
+            )
+        )
+        markdown = backend.annotationsToMarkdown()
+        assert markdown == (
+            "- Crosshair @ (412, 230): 48 × 32 px\n"
+            "- Container @ (100, 80): 320 × 200 px"
+        )
+
+    def test_annotations_to_markdown_accepts_float_mode_values(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="10 × 10 px", mode=0.0, cursorX=1, cursorY=2))
+
+        markdown = backend.annotationsToMarkdown()
+
+        assert markdown == "- Crosshair @ (1, 2): 10 × 10 px"
+
+    def test_copy_annotations_markdown_to_clipboard_uses_exported_text(self, monkeypatch):
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="A"))
+
+        copied = []
+        monkeypatch.setattr(backend, "_copy_text_to_clipboard", lambda text: copied.append(text))
+
+        backend.copyAnnotationsMarkdownToClipboard()
+
+        assert copied == [backend.annotationsToMarkdown()]
+
+    def test_build_composite_image_for_region_crops_source_image(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        source = QImage(20, 20, QImage.Format.Format_ARGB32)
+        source.fill(QColor("#112233"))
+        edge_map = np.zeros((20, 20), dtype=bool)
+        backend = RulerBackend(
+            edge_map=edge_map,
+            dpr_x=1.0,
+            dpr_y=1.0,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=20,
+            virtual_h=20,
+            source_image=source,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+        cropped = backend.buildCompositeImageForRegion(4, 6, 8, 5)
+
+        assert not cropped.isNull()
+        assert cropped.width() == 8
+        assert cropped.height() == 5
+        assert cropped.pixelColor(0, 0) == QColor("#112233")
+
+    def test_copy_composite_region_to_clipboard_uses_generated_image(self, monkeypatch):
+        from PyQt6.QtGui import QColor, QImage
+
+        source = QImage(20, 20, QImage.Format.Format_ARGB32)
+        source.fill(QColor("#abcdef"))
+        edge_map = np.zeros((20, 20), dtype=bool)
+        backend = RulerBackend(
+            edge_map=edge_map,
+            dpr_x=1.0,
+            dpr_y=1.0,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=20,
+            virtual_h=20,
+            source_image=source,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+        copied_sizes = []
+        monkeypatch.setattr(
+            backend,
+            "_copy_image_to_clipboard",
+            lambda image: copied_sizes.append((image.width(), image.height())),
+        )
+
+        result = backend.copyCompositeRegionToClipboard(2, 3, 7, 4)
+
+        assert result is True
+        assert copied_sizes == [(7, 4)]

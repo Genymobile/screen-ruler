@@ -22,7 +22,7 @@ TIMER_INTERVAL_MS = 16
 
 
 class QuitKeysEventFilter(QObject):
-    """Catch Esc/Q at app level when WM focus is unreliable on X11 overlays."""
+    """Catch Q at app level when WM focus is unreliable on X11 overlays."""
 
     def eventFilter(self, _obj: QObject, event: QEvent) -> bool:
         if event.type() != QEvent.Type.KeyPress:
@@ -31,7 +31,11 @@ class QuitKeysEventFilter(QObject):
             return False
 
         key = event.key()
-        if key in (Qt.Key.Key_Escape, Qt.Key.Key_Q):
+        if key == Qt.Key.Key_Q:
+            # Let focused QML window handle Q so session-mode confirmation logic
+            # can run; fall back only when no Qt window currently has focus.
+            if QGuiApplication.focusWindow() is not None:
+                return False
             QGuiApplication.quit()
             return True
         return False
@@ -49,9 +53,14 @@ def parse_args() -> argparse.Namespace:
             "  - Mouse wheel: adjust sensitivity\n"
             "Keyboard shortcuts:\n"
             "  - 1 / 2 / 3: switch measurement mode\n"
-            "  - Ctrl+C: copy measurement to clipboard and quit\n"
+            "  - Tab: toggle session mode\n"
+            "  - Ctrl+C: copy measurement and quit (quick) / export session annotations as Markdown\n"
+            "  - Ctrl+Z / Z: undo last annotation (session mode)\n"
+            "  - Ctrl+Shift+Z: redo annotation (session mode)\n"
+            "  - Ctrl+Shift+C: start composite export mode, then drag a region (session mode)\n"
             "  - ? / H: toggle shortcut overlay\n"
-            "  - Esc / Q: quit"
+            "  - Esc: exit session mode or quit\n"
+            "  - Q: quit"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
