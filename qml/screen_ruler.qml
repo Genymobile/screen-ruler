@@ -56,9 +56,10 @@ Window {
     property real containerWidth: 0
     property real containerHeight: 0
     property real rectSnapDistance: 10
-    property bool helpOverlayVisible: false
+    property bool helpOverlayTargetVisible: false
     property bool startupHelpActive: false
     property real helpOverlayOpacity: 0.0
+    readonly property bool helpOverlayVisible: helpOverlayTargetVisible || helpOverlayOpacity > 0.01
     property bool sessionMode: false
     property int pendingDestructiveKey: -1
     property string pendingDestructiveMessage: ""
@@ -69,6 +70,7 @@ Window {
     readonly property int rectSnapStep: 1
     readonly property int destructiveActionConfirmMs: 1500
     readonly property int sessionActionFeedbackMs: 1200
+    readonly property int destructiveSessionToggleButtonKey: -2
 
     function isRectSelectionMode(mode) {
         return mode === modeRectDrag || mode === modeShrinkToFit
@@ -168,6 +170,8 @@ Window {
     function pendingMessageForKey(key) {
         if (key === Qt.Key_Tab)
             return "Press Tab again to discard annotations"
+        if (key === destructiveSessionToggleButtonKey)
+            return "Click SESSION again to discard annotations"
         if (key === Qt.Key_Escape)
             return "Press Esc again to discard annotations"
         if (key === Qt.Key_Q)
@@ -176,7 +180,7 @@ Window {
     }
 
     function performDestructiveAction(key) {
-        if (key === Qt.Key_Tab) {
+        if (key === Qt.Key_Tab || key === destructiveSessionToggleButtonKey) {
             setSessionMode(false)
             return
         }
@@ -217,6 +221,15 @@ Window {
             return
         }
         requestDestructiveAction(Qt.Key_Tab)
+    }
+
+    function handleSessionToggleButtonAction() {
+        if (!sessionMode) {
+            clearPendingDestructiveAction()
+            setSessionMode(true)
+            return
+        }
+        requestDestructiveAction(destructiveSessionToggleButtonKey)
     }
 
     function handleEscapeAction() {
@@ -532,39 +545,37 @@ Window {
 
     function showStartupHelpOverlay() {
         startupHelpActive = true
-        helpOverlayVisible = true
+        helpOverlayTargetVisible = true
         helpOverlayOpacity = 1.0
-        helpFadeAnimation.stop()
         helpAutoHideTimer.restart()
     }
 
     function hideHelpOverlay() {
         startupHelpActive = false
         helpAutoHideTimer.stop()
-        helpFadeAnimation.stop()
-        helpOverlayVisible = false
+        helpOverlayTargetVisible = false
         helpOverlayOpacity = 0.0
     }
 
     function dismissStartupHelpOverlay() {
-        if (!startupHelpActive || !helpOverlayVisible)
+        if (!startupHelpActive || !helpOverlayTargetVisible)
             return
         hideHelpOverlay()
     }
 
     function toggleHelpOverlay() {
-        if (helpOverlayVisible) {
+        if (helpOverlayTargetVisible) {
             hideHelpOverlay()
             return
         }
         startupHelpActive = false
-        helpOverlayVisible = true
+        helpAutoHideTimer.stop()
+        helpOverlayTargetVisible = true
         helpOverlayOpacity = 1.0
-        helpFadeAnimation.stop()
     }
 
     function dismissStartupHelpFromPointer() {
-        if (!startupHelpActive || !helpOverlayVisible)
+        if (!startupHelpActive || !helpOverlayTargetVisible)
             return
         hideHelpOverlay()
     }
@@ -908,52 +919,68 @@ Window {
         }
     }
 
+    OverlayActionButton {
+        id: helpToggleButton
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: RulerTheme.baseMargin
+        anchors.rightMargin: RulerTheme.baseMargin
+        implicitWidth: RulerTheme.modeButtonSize
+        implicitHeight: RulerTheme.modeButtonSize
+        cornerRadius: width / 2
+        labelText: "?"
+        tooltipText: "Toggle shortcut help"
+        isActive: root.helpOverlayTargetVisible
+        activeBgColor: Qt.rgba(0.90, 0.10, 0.37, 0.32)
+        labelColor: isActive ? RulerTheme.accentColor : RulerTheme.primaryTextColor
+        z: 40
+        onClicked: {
+            root.clearPendingDestructiveAction()
+            root.dismissStartupHelpOverlay()
+            root.toggleHelpOverlay()
+        }
+    }
+
     ShortcutHelpOverlay {
         id: helpOverlay
         anchors.top: parent.top
         anchors.right: parent.right
-        anchors.topMargin: RulerTheme.baseMargin
+        anchors.topMargin: RulerTheme.baseMargin + helpToggleButton.height + 8
         anchors.rightMargin: RulerTheme.baseMargin
         overlayVisible: root.helpOverlayVisible
         overlayOpacity: root.helpOverlayOpacity
         sessionMode: root.sessionMode
     }
 
-    Rectangle {
-        id: sessionModeBadge
+    OverlayActionButton {
+        id: sessionModeToggleButton
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.leftMargin: RulerTheme.baseMargin
         anchors.topMargin: RulerTheme.baseMargin
-        visible: root.sessionMode
+        implicitWidth: 96
+        implicitHeight: 30
+        labelText: "SESSION"
+        tooltipText: root.sessionMode ? "Exit session mode" : "Enter session mode"
+        isActive: root.sessionMode
         z: 40
-        radius: RulerTheme.cornerRadius
-        color: RulerTheme.sessionModeBadgeColor
-        opacity: RulerTheme.sessionModeBadgeOpacity
-        width: sessionModeLabel.implicitWidth + RulerTheme.sessionModeBadgeHorizontalPadding
-        height: sessionModeLabel.implicitHeight + RulerTheme.sessionModeBadgeVerticalPadding
-
-        Text {
-            id: sessionModeLabel
-            anchors.centerIn: parent
-            text: "SESSION"
-            color: RulerTheme.primaryTextColor
-            font.pointSize: RulerTheme.controlsValuePointSize
-            font.bold: true
+        onClicked: {
+            root.dismissStartupHelpOverlay()
+            root.handleSessionToggleButtonAction()
         }
     }
 
     Row {
-        anchors.left: sessionModeBadge.right
+        anchors.left: sessionModeToggleButton.right
         anchors.leftMargin: 8
-        anchors.verticalCenter: sessionModeBadge.verticalCenter
+        anchors.verticalCenter: sessionModeToggleButton.verticalCenter
         visible: root.sessionMode
         spacing: 6
         z: 40
 
         OverlayActionButton {
             implicitWidth: 46
-            implicitHeight: sessionModeBadge.height
+            implicitHeight: sessionModeToggleButton.height
             labelText: "MD"
             tooltipText: "Copy annotations as Markdown"
             isActive: false
@@ -968,7 +995,7 @@ Window {
 
         OverlayActionButton {
             implicitWidth: 52
-            implicitHeight: sessionModeBadge.height
+            implicitHeight: sessionModeToggleButton.height
             labelText: "IMG"
             tooltipText: "Copy annotations as image"
             isActive: root.exportSelectionActive
@@ -1048,21 +1075,13 @@ Window {
         id: helpAutoHideTimer
         interval: RulerTheme.helpOverlayAutoHideMs
         repeat: false
-        onTriggered: helpFadeAnimation.restart()
+        onTriggered: root.hideHelpOverlay()
     }
 
-    NumberAnimation {
-        id: helpFadeAnimation
-        target: root
-        property: "helpOverlayOpacity"
-        to: 0.0
-        duration: RulerTheme.helpOverlayFadeMs
-        easing.type: Easing.OutQuad
-        onFinished: {
-            if (root.helpOverlayOpacity <= 0.01) {
-                root.helpOverlayVisible = false
-                root.startupHelpActive = false
-            }
+    Behavior on helpOverlayOpacity {
+        NumberAnimation {
+            duration: RulerTheme.helpOverlayFadeMs
+            easing.type: Easing.OutQuad
         }
     }
 
