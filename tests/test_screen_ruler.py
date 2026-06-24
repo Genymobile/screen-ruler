@@ -650,6 +650,21 @@ class TestAnnotationModel:
 
         assert markdown == "- Crosshair @ (1, 2): 10 × 10 px"
 
+    def test_annotations_to_markdown_labels_color_mode(self):
+        backend = self._backend()
+        backend.addAnnotation(
+            self._sample(
+                mode=4,
+                cursorX=33,
+                cursorY=44,
+                text="#FF5722 rgb(255, 87, 34)",
+            )
+        )
+
+        markdown = backend.annotationsToMarkdown()
+
+        assert markdown == "- Color @ (33, 44): #FF5722 rgb(255, 87, 34)"
+
     def test_copy_annotations_markdown_to_clipboard_uses_exported_text(self, monkeypatch):
         backend = self._backend()
         backend.addAnnotation(self._sample(text="A"))
@@ -784,3 +799,56 @@ class TestShrinkRectToContent:
         assert result["y"] == 3.0
         assert result["width"] == 4.0
         assert result["height"] == 4.0
+
+
+class TestSampleColorAtPoint:
+    """Tests for color sampling from screenshot image."""
+
+    def _backend(self, source_image, edge_w: int, edge_h: int, dpr_x: float = 1.0, dpr_y: float = 1.0) -> RulerBackend:
+        edge_map = np.zeros((edge_h, edge_w), dtype=bool)
+        return RulerBackend(
+            edge_map=edge_map,
+            dpr_x=dpr_x,
+            dpr_y=dpr_y,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=edge_w,
+            virtual_h=edge_h,
+            source_image=source_image,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+    def test_sample_color_at_point_returns_hex_and_rgb(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        image = QImage(6, 6, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        image.setPixelColor(2, 3, QColor("#FF5722"))
+        backend = self._backend(image, edge_w=6, edge_h=6)
+
+        sampled = backend.sampleColorAtPoint(2.0, 3.0)
+
+        assert sampled["available"] is True
+        assert sampled["hex"] == "#FF5722"
+        assert sampled["rgb"] == "rgb(255, 87, 34)"
+        assert sampled["hsl"] == "hsl(14, 100%, 57%)"
+        assert sampled["r"] == 255
+        assert sampled["g"] == 87
+        assert sampled["b"] == 34
+
+    def test_sample_color_at_point_respects_dpr_mapping(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        image = QImage(10, 10, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        image.setPixelColor(4, 2, QColor("#3366CC"))
+        backend = self._backend(image, edge_w=10, edge_h=10, dpr_x=2.0, dpr_y=2.0)
+
+        sampled = backend.sampleColorAtPoint(2.0, 1.0)
+
+        assert sampled["available"] is True
+        assert sampled["hex"] == "#3366CC"
+        assert sampled["rgb"] == "rgb(51, 102, 204)"
+        assert sampled["hsl"] == "hsl(220, 60%, 50%)"

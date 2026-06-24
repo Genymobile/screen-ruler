@@ -435,6 +435,7 @@ class RulerBackend(QObject):
             1: "Rectangle",
             2: "Rectangle",
             3: "Rectangle",
+            4: "Color",
         }
         try:
             mode_key = int(float(mode))
@@ -516,6 +517,70 @@ class RulerBackend(QObject):
             y = self._format_coordinate(annotation.get("cursorY", annotation.get("y")))
             lines.append(f"- {mode} @ ({x}, {y}): {measurement}")
         return "\n".join(lines)
+
+    @pyqtSlot(float, float, result="QVariant")
+    def sampleColorAtPoint(self, local_x: float, local_y: float) -> dict[str, str | float | bool]:
+        if self._source_image.isNull():
+            return {
+                "available": False,
+                "x": float(local_x),
+                "y": float(local_y),
+                "hex": "",
+                "rgb": "",
+                "hsl": "",
+                "r": 0,
+                "g": 0,
+                "b": 0,
+                "h": 0,
+                "s": 0,
+                "l": 0,
+            }
+
+        map_h, map_w = self._edge_map.shape
+        if map_w <= 0 or map_h <= 0:
+            return {
+                "available": False,
+                "x": float(local_x),
+                "y": float(local_y),
+                "hex": "",
+                "rgb": "",
+                "hsl": "",
+                "r": 0,
+                "g": 0,
+                "b": 0,
+                "h": 0,
+                "s": 0,
+                "l": 0,
+            }
+
+        ex = max(0, min(int(round(float(local_x) * self._dpr_x)), map_w - 1))
+        ey = max(0, min(int(round(float(local_y) * self._dpr_y)), map_h - 1))
+        color = self._source_image.pixelColor(ex, ey)
+        r = int(color.red())
+        g = int(color.green())
+        b = int(color.blue())
+        hex_value = f"#{r:02X}{g:02X}{b:02X}"
+        rgb_value = f"rgb({r}, {g}, {b})"
+        hue = int(color.hslHue())
+        if hue < 0:
+            hue = 0
+        saturation = int(round(color.hslSaturation() * 100 / 255))
+        lightness = int(round(color.lightness() * 100 / 255))
+        hsl_value = f"hsl({hue}, {saturation}%, {lightness}%)"
+        return {
+            "available": True,
+            "x": float(ex) / self._dpr_x,
+            "y": float(ey) / self._dpr_y,
+            "hex": hex_value,
+            "rgb": rgb_value,
+            "hsl": hsl_value,
+            "r": r,
+            "g": g,
+            "b": b,
+            "h": hue,
+            "s": saturation,
+            "l": lightness,
+        }
 
     @pyqtSlot(float, float, float, float, result="QVariant")
     def shrinkRectToContent(
@@ -710,6 +775,21 @@ class RulerBackend(QObject):
             painter.drawLine(QPointF(cx - tick, south), QPointF(cx + tick, south))
             painter.drawLine(QPointF(west, cy - tick), QPointF(west, cy + tick))
             painter.drawLine(QPointF(east, cy - tick), QPointF(east, cy + tick))
+        elif mode == 4:
+            x = self._local_to_image_x(annotation.get("x")) - crop_left
+            y = self._local_to_image_y(annotation.get("y")) - crop_top
+            marker_arm = max(3.0, 5.0 * ((self._dpr_x + self._dpr_y) / 2.0))
+            marker_gap = max(1.0, 2.0 * ((self._dpr_x + self._dpr_y) / 2.0))
+            painter.drawLine(QPointF(x - marker_arm, y), QPointF(x - marker_gap, y))
+            painter.drawLine(QPointF(x + marker_gap, y), QPointF(x + marker_arm, y))
+            painter.drawLine(QPointF(x, y - marker_arm), QPointF(x, y - marker_gap))
+            painter.drawLine(QPointF(x, y + marker_gap), QPointF(x, y + marker_arm))
+            swatch_size = max(8.0, 12.0 * ((self._dpr_x + self._dpr_y) / 2.0))
+            swatch_color = QColor(str(annotation.get("colorHex", "#000000")))
+            swatch_x = x + max(6.0, 10.0 * ((self._dpr_x + self._dpr_y) / 2.0))
+            swatch_y = y + max(4.0, 8.0 * ((self._dpr_x + self._dpr_y) / 2.0))
+            painter.fillRect(QRectF(swatch_x, swatch_y, swatch_size, swatch_size), swatch_color)
+            painter.drawRect(QRectF(swatch_x, swatch_y, swatch_size, swatch_size))
         else:
             x = self._local_to_image_x(annotation.get("x")) - crop_left
             y = self._local_to_image_y(annotation.get("y")) - crop_top

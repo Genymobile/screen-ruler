@@ -38,14 +38,14 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 
 | Input | Action |
 |---|---|
-| `1` / `2` / `3` / `4` | Switch measurement mode |
+| `1` / `2` / `3` / `4` / `5` | Switch measurement mode |
 | `Tab` | Toggle session mode (persistent annotation workspace) |
 | `Ctrl+C` | Copy current measurement to clipboard, then quit (quick mode) |
 | `Enter` | Copy drag/shrink selection to clipboard, then quit (quick mode) |
 | `?` or `H` | Toggle the shortcut help overlay |
 | `Escape` | Exit session mode (or quit when not in session mode) |
 | `Q` | Quit |
-| Left click | Copy current measurement as `W × H px` and quit (crosshair/container), or confirm drag/shrink selection |
+| Left click | Copy current measurement and quit (crosshair/container/color), or confirm drag/shrink selection |
 | Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
 
 **Session mode controls** *(active after pressing `Tab`)*

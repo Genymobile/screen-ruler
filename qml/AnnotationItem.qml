@@ -47,14 +47,30 @@ Item {
     }
 
     // -----------------------------------------------------------------------
-    // Selection outline — rect drag / container trace modes (mode 1 and 2)
+    // Selection outline — rectangle-like modes (mode 1/2/3)
     // -----------------------------------------------------------------------
     SelectionOutline {
         x: modelData.x
         y: modelData.y
         width: modelData.width
         height: modelData.height
-        visible: modelData.mode !== 0
+        visible: modelData.mode === 1 || modelData.mode === 2 || modelData.mode === 3
+    }
+
+    ColorSampleMarker {
+        markerX: modelData.x
+        markerY: modelData.y
+        visible: modelData.mode === 4
+    }
+
+    ColorSampleBubble {
+        bubbleX: modelData.x + RulerTheme.baseMargin + 8
+        bubbleY: modelData.y + RulerTheme.labelOffsetY + 6
+        swatchColor: modelData.colorHex ? modelData.colorHex : "#000000"
+        hexText: modelData.colorHex ? modelData.colorHex : "#000000"
+        rgbText: modelData.colorRgb ? modelData.colorRgb : "rgb(0, 0, 0)"
+        hslText: modelData.colorHsl ? modelData.colorHsl : "hsl(0, 0%, 0%)"
+        visible: modelData.mode === 4
     }
 
     // -----------------------------------------------------------------------
@@ -64,6 +80,6 @@ Item {
         labelX: (modelData.mode === 0 ? modelData.cursorX : modelData.x) + RulerTheme.baseMargin
         labelY: (modelData.mode === 0 ? modelData.cursorY : modelData.y) + RulerTheme.labelOffsetY
         textValue: modelData.text
-        visible: true
+        visible: modelData.mode !== 4
     }
 }
