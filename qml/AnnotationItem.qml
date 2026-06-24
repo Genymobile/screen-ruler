@@ -7,8 +7,6 @@
 import QtQuick
 
 Item {
-    required property var modelData
-
     anchors.fill: parent
 
     // -----------------------------------------------------------------------

@@ -435,7 +435,11 @@ class RulerBackend(QObject):
             1: "Rectangle",
             2: "Container",
         }
-        return labels.get(mode, str(mode))
+        try:
+            mode_key = int(float(mode))
+        except (TypeError, ValueError):
+            return str(mode)
+        return labels.get(mode_key, str(mode))
 
     @staticmethod
     def _format_coordinate(value: object) -> str:

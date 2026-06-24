@@ -642,6 +642,14 @@ class TestAnnotationModel:
             "- Container @ (100, 80): 320 × 200 px"
         )
 
+    def test_annotations_to_markdown_accepts_float_mode_values(self):
+        backend = self._backend()
+        backend.addAnnotation(self._sample(text="10 × 10 px", mode=0.0, cursorX=1, cursorY=2))
+
+        markdown = backend.annotationsToMarkdown()
+
+        assert markdown == "- Crosshair @ (1, 2): 10 × 10 px"
+
     def test_copy_annotations_markdown_to_clipboard_uses_exported_text(self, monkeypatch):
         backend = self._backend()
         backend.addAnnotation(self._sample(text="A"))
