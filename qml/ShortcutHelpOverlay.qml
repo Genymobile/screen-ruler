@@ -104,7 +104,7 @@ Rectangle {
         }
 
         Text {
-            text: "Mouse wheel — adjust sensitivity/snap distance"
+            text: "Mouse wheel — adjust sensitivity/snap distance/color averaging"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }

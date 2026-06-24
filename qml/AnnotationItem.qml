@@ -60,6 +60,7 @@ Item {
     ColorSampleMarker {
         markerX: modelData.x
         markerY: modelData.y
+        sampleRadius: modelData.sampleRadius ? modelData.sampleRadius : 0
         visible: modelData.mode === 4
     }
 

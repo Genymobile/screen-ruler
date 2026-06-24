@@ -70,6 +70,7 @@ Window {
     property bool sampledColorAvailable: false
     property real sampledColorX: 0
     property real sampledColorY: 0
+    property real sampledColorRadius: 0
     property string sampledColorHex: ""
     property string sampledColorRgb: ""
     property string sampledColorHsl: ""
@@ -79,6 +80,10 @@ Window {
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
+    readonly property int colorSampleRadiusMin: 0
+    readonly property int colorSampleRadiusMax: 24
+    readonly property int colorSampleRadiusStep: 1
+    property real colorSampleRadius: 0
     readonly property int destructiveActionConfirmMs: 1500
     readonly property int sessionActionFeedbackMs: 1200
     readonly property int destructiveSessionToggleButtonKey: -2
@@ -110,6 +115,7 @@ Window {
             sampledColorAvailable = false
             sampledColorX = 0
             sampledColorY = 0
+            sampledColorRadius = 0
             sampledColorHex = ""
             sampledColorRgb = ""
             sampledColorHsl = ""
@@ -319,6 +325,7 @@ Window {
             sampledColorAvailable = false
             sampledColorX = 0
             sampledColorY = 0
+            sampledColorRadius = 0
             sampledColorHex = ""
             sampledColorRgb = ""
             sampledColorHsl = ""
@@ -328,11 +335,12 @@ Window {
             return
         }
 
-        var sampled = backend.sampleColorAtPoint(pointerX, pointerY)
+        var sampled = backend.sampleColorAtPoint(pointerX, pointerY, colorSampleRadius)
         if (!sampled || !sampled.available) {
             sampledColorAvailable = false
             sampledColorX = 0
             sampledColorY = 0
+            sampledColorRadius = 0
             sampledColorHex = ""
             sampledColorRgb = ""
             sampledColorHsl = ""
@@ -344,6 +352,7 @@ Window {
         sampledColorAvailable = true
         sampledColorX = sampled.x
         sampledColorY = sampled.y
+        sampledColorRadius = sampled.sampleRadius
         sampledColorHex = sampled.hex
         sampledColorRgb = sampled.rgb
         sampledColorHsl = sampled.hsl
@@ -429,6 +438,10 @@ Window {
         return Math.max(rectSnapMin, Math.min(rectSnapMax, value))
     }
 
+    function clampColorSampleRadius(value) {
+        return Math.max(colorSampleRadiusMin, Math.min(colorSampleRadiusMax, value))
+    }
+
     function applySensitivityValue(value) {
         if (!hasBackend)
             return
@@ -441,6 +454,11 @@ Window {
     function applySnapDistanceValue(value) {
         rectSnapDistance = clampRectSnapDistance(value)
         refreshSnappedPointer()
+    }
+
+    function applyColorSampleRadiusValue(value) {
+        colorSampleRadius = clampColorSampleRadius(value)
+        refreshSampledColor()
     }
 
     function adjustSensitivityByWheelSteps(notchSteps) {
@@ -463,6 +481,16 @@ Window {
         applySnapDistanceValue(nextSnap)
     }
 
+    function adjustColorSampleRadiusByWheelSteps(notchSteps) {
+        var currentRadius = controlsPanel.colorSampleSliderValue
+        var nextRadius = currentRadius + notchSteps * colorSampleRadiusStep
+        nextRadius = Math.max(colorSampleRadiusMin, Math.min(colorSampleRadiusMax, nextRadius))
+        if (nextRadius === currentRadius)
+            return
+        controlsPanel.colorSampleSliderValue = nextRadius
+        applyColorSampleRadiusValue(nextRadius)
+    }
+
     function adjustActiveModeSliderByWheel(wheelDeltaY) {
         if (!hasBackend || wheelDeltaY === 0)
             return
@@ -481,6 +509,11 @@ Window {
 
         if (activeMode === modeRectDrag) {
             adjustSnapDistanceByWheelSteps(notchSteps)
+            return
+        }
+
+        if (activeMode === modeColorPicker) {
+            adjustColorSampleRadiusByWheelSteps(notchSteps)
             return
         }
 
@@ -628,6 +661,7 @@ Window {
                 colorR: sampledColorR,
                 colorG: sampledColorG,
                 colorB: sampledColorB,
+                sampleRadius: sampledColorRadius,
             }
         } else {
             return
@@ -984,6 +1018,7 @@ Window {
         anchors.topMargin: RulerTheme.baseMargin
         activeMode: root.activeMode
         modeRectDrag: root.modeRectDrag
+        modeColorPicker: root.modeColorPicker
         hasBackend: root.hasBackend
         sensitivityMin: root.sensitivityMin
         sensitivityMax: root.sensitivityMax
@@ -994,6 +1029,10 @@ Window {
         rectSnapMax: root.rectSnapMax
         rectSnapStep: root.rectSnapStep
         rectSnapDistance: root.rectSnapDistance
+        colorSampleRadiusMin: root.colorSampleRadiusMin
+        colorSampleRadiusMax: root.colorSampleRadiusMax
+        colorSampleRadiusStep: root.colorSampleRadiusStep
+        colorSampleRadius: root.colorSampleRadius
 
         onPanelPressed: { root.clearPendingDestructiveAction(); root.dismissStartupHelpOverlay() }
         onModeSelected: (mode) => { root.dismissStartupHelpOverlay(); root.setActiveMode(mode) }
@@ -1006,6 +1045,11 @@ Window {
             root.clearPendingDestructiveAction()
             root.dismissStartupHelpOverlay()
             root.applySnapDistanceValue(value)
+        }
+        onColorSampleRadiusMoved: (value) => {
+            root.clearPendingDestructiveAction()
+            root.dismissStartupHelpOverlay()
+            root.applyColorSampleRadiusValue(value)
         }
     }
 
@@ -1027,8 +1071,11 @@ Window {
                 controlsPanel.sensitivitySliderValue = backend.sensitivity
             if (!controlsPanel.snapSliderPressed)
                 controlsPanel.snapSliderValue = root.rectSnapDistance
+            if (!controlsPanel.colorSampleSliderPressed)
+                controlsPanel.colorSampleSliderValue = root.colorSampleRadius
             root.refreshSnappedPointer()
             root.refreshContainerSelection()
+            root.refreshSampledColor()
         }
     }
 
@@ -1315,6 +1362,7 @@ Window {
     ColorSampleMarker {
         markerX: root.sampledColorX
         markerY: root.sampledColorY
+        sampleRadius: root.sampledColorRadius
         visible: root.activeMode === modeColorPicker && root.sampledColorAvailable && !root.exportSelectionActive
         z: 3
     }

@@ -47,6 +47,8 @@ python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-ov
 | `Q` | Quit |
 | Left click | Copy current measurement and quit (crosshair/container/color), or confirm drag/shrink selection |
 | Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
+| Color mode `Average (px)` slider | Increase circular weighted sampling radius (0 = single pixel) |
+| Mouse wheel | Adjust active mode control (sensitivity / snap distance / color averaging) |
 
 **Session mode controls** *(active after pressing `Tab`)*
 

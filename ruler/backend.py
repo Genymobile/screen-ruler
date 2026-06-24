@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import subprocess
 
@@ -518,8 +519,58 @@ class RulerBackend(QObject):
             lines.append(f"- {mode} @ ({x}, {y}): {measurement}")
         return "\n".join(lines)
 
-    @pyqtSlot(float, float, result="QVariant")
-    def sampleColorAtPoint(self, local_x: float, local_y: float) -> dict[str, str | float | bool]:
+    def _sample_weighted_color(
+        self,
+        center_x: int,
+        center_y: int,
+        radius_px: int,
+        map_w: int,
+        map_h: int,
+    ) -> tuple[int, int, int]:
+        if radius_px <= 0:
+            color = self._source_image.pixelColor(center_x, center_y)
+            return int(color.red()), int(color.green()), int(color.blue())
+
+        min_x = max(0, center_x - radius_px)
+        max_x = min(map_w - 1, center_x + radius_px)
+        min_y = max(0, center_y - radius_px)
+        max_y = min(map_h - 1, center_y + radius_px)
+        radius_sq = float(radius_px * radius_px)
+        sigma = max(0.5, radius_px / 2.0)
+        inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma)
+
+        sum_w = 0.0
+        sum_r = 0.0
+        sum_g = 0.0
+        sum_b = 0.0
+        for py in range(min_y, max_y + 1):
+            dy = float(py - center_y)
+            for px in range(min_x, max_x + 1):
+                dx = float(px - center_x)
+                dist_sq = dx * dx + dy * dy
+                if dist_sq > radius_sq:
+                    continue
+                weight = math.exp(-dist_sq * inv_two_sigma_sq)
+                color = self._source_image.pixelColor(px, py)
+                sum_w += weight
+                sum_r += weight * float(color.red())
+                sum_g += weight * float(color.green())
+                sum_b += weight * float(color.blue())
+
+        if sum_w <= 0.0:
+            color = self._source_image.pixelColor(center_x, center_y)
+            return int(color.red()), int(color.green()), int(color.blue())
+
+        return (
+            int(round(sum_r / sum_w)),
+            int(round(sum_g / sum_w)),
+            int(round(sum_b / sum_w)),
+        )
+
+    @pyqtSlot(float, float, float, result="QVariant")
+    def sampleColorAtPoint(
+        self, local_x: float, local_y: float, local_radius: float = 0.0
+    ) -> dict[str, str | float | bool]:
         if self._source_image.isNull():
             return {
                 "available": False,
@@ -534,6 +585,7 @@ class RulerBackend(QObject):
                 "h": 0,
                 "s": 0,
                 "l": 0,
+                "sampleRadius": 0.0,
             }
 
         map_h, map_w = self._edge_map.shape
@@ -551,14 +603,16 @@ class RulerBackend(QObject):
                 "h": 0,
                 "s": 0,
                 "l": 0,
+                "sampleRadius": 0.0,
             }
 
         ex = max(0, min(int(round(float(local_x) * self._dpr_x)), map_w - 1))
         ey = max(0, min(int(round(float(local_y) * self._dpr_y)), map_h - 1))
-        color = self._source_image.pixelColor(ex, ey)
-        r = int(color.red())
-        g = int(color.green())
-        b = int(color.blue())
+        avg_dpr = max(1e-6, (self._dpr_x + self._dpr_y) / 2.0)
+        radius_map = max(0, int(round(float(local_radius) * avg_dpr)))
+        sampled_radius_local = float(radius_map) / avg_dpr
+        r, g, b = self._sample_weighted_color(ex, ey, radius_map, map_w, map_h)
+        color = QColor(r, g, b)
         hex_value = f"#{r:02X}{g:02X}{b:02X}"
         rgb_value = f"rgb({r}, {g}, {b})"
         hue = int(color.hslHue())
@@ -580,6 +634,7 @@ class RulerBackend(QObject):
             "h": hue,
             "s": saturation,
             "l": lightness,
+            "sampleRadius": sampled_radius_local,
         }
 
     @pyqtSlot(float, float, float, float, result="QVariant")
@@ -914,8 +969,11 @@ class RulerBackend(QObject):
         elif mode == 4:
             x = self._local_to_image_x(annotation.get("x")) - crop_left
             y = self._local_to_image_y(annotation.get("y")) - crop_top
+            avg_dpr = max(1e-6, (self._dpr_x + self._dpr_y) / 2.0)
+            radius = max(0.8, self._to_float(annotation.get("sampleRadius", 0.0)) * avg_dpr)
             marker_arm = max(3.0, 5.0 * ((self._dpr_x + self._dpr_y) / 2.0))
             marker_gap = max(1.0, 2.0 * ((self._dpr_x + self._dpr_y) / 2.0))
+            painter.drawEllipse(QPointF(x, y), radius, radius)
             painter.drawLine(QPointF(x - marker_arm, y), QPointF(x - marker_gap, y))
             painter.drawLine(QPointF(x + marker_gap, y), QPointF(x + marker_arm, y))
             painter.drawLine(QPointF(x, y - marker_arm), QPointF(x, y - marker_gap))

@@ -858,7 +858,7 @@ class TestSampleColorAtPoint:
         image.setPixelColor(2, 3, QColor("#FF5722"))
         backend = self._backend(image, edge_w=6, edge_h=6)
 
-        sampled = backend.sampleColorAtPoint(2.0, 3.0)
+        sampled = backend.sampleColorAtPoint(2.0, 3.0, 0.0)
 
         assert sampled["available"] is True
         assert sampled["hex"] == "#FF5722"
@@ -867,6 +867,7 @@ class TestSampleColorAtPoint:
         assert sampled["r"] == 255
         assert sampled["g"] == 87
         assert sampled["b"] == 34
+        assert sampled["sampleRadius"] == 0.0
 
     def test_sample_color_at_point_respects_dpr_mapping(self):
         from PyQt6.QtGui import QColor, QImage
@@ -876,9 +877,28 @@ class TestSampleColorAtPoint:
         image.setPixelColor(4, 2, QColor("#3366CC"))
         backend = self._backend(image, edge_w=10, edge_h=10, dpr_x=2.0, dpr_y=2.0)
 
-        sampled = backend.sampleColorAtPoint(2.0, 1.0)
+        sampled = backend.sampleColorAtPoint(2.0, 1.0, 0.0)
 
         assert sampled["available"] is True
         assert sampled["hex"] == "#3366CC"
         assert sampled["rgb"] == "rgb(51, 102, 204)"
         assert sampled["hsl"] == "hsl(220, 60%, 50%)"
+
+    def test_sample_color_at_point_averages_circular_region(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        image = QImage(9, 9, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        image.setPixelColor(4, 4, QColor("#FFFFFF"))
+        backend = self._backend(image, edge_w=9, edge_h=9)
+
+        sampled = backend.sampleColorAtPoint(4.0, 4.0, 2.0)
+
+        assert sampled["available"] is True
+        assert sampled["sampleRadius"] == 2.0
+        assert sampled["r"] < 255
+        assert sampled["g"] < 255
+        assert sampled["b"] < 255
+        assert sampled["r"] > 0
+        assert sampled["g"] > 0
+        assert sampled["b"] > 0
