@@ -3,8 +3,10 @@ import QtQuick
 Item {
     required property int activeMode
     required property int modeRectDrag
+    required property int modeShrinkToFit
     required property bool canCopy
     required property bool sessionMode
+    required property bool quickRectConfirmPending
 
     signal pointerPressed(real x, real y, int button)
     signal pointerMoved(real x, real y)
@@ -21,7 +23,9 @@ Item {
 
         onPressed: (mouse) => {
             pointerPressed(mouse.x, mouse.y, mouse.button)
-            if (activeMode === modeRectDrag && mouse.button === Qt.LeftButton)
+            if ((activeMode === modeRectDrag || activeMode === modeShrinkToFit)
+                    && !quickRectConfirmPending
+                    && mouse.button === Qt.LeftButton)
                 mouse.accepted = true
         }
 
@@ -31,13 +35,20 @@ Item {
 
         onReleased: (mouse) => {
             pointerReleased(mouse.x, mouse.y, mouse.button)
-            if (activeMode === modeRectDrag && mouse.button === Qt.LeftButton)
+            if ((activeMode === modeRectDrag || activeMode === modeShrinkToFit)
+                    && !quickRectConfirmPending
+                    && mouse.button === Qt.LeftButton)
                 mouse.accepted = true
         }
 
         onClicked: (mouse) => {
             if (sessionMode) {
                 sessionClickRequested(mouse.x, mouse.y)
+                mouse.accepted = true
+                return
+            }
+            if (quickRectConfirmPending) {
+                copyRequested()
                 mouse.accepted = true
                 return
             }

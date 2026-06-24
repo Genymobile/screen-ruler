@@ -33,7 +33,7 @@ Rectangle {
         }
 
         Text {
-            text: "1 / 2 / 3  — switch measurement mode"
+            text: "1 / 2 / 3 / 4  — switch measurement mode"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
@@ -49,7 +49,14 @@ Rectangle {
         Text {
             text: root.sessionMode
                   ? "Click — place annotation (persistent)"
-                  : "Click — copy measurement, then quit"
+                  : "Click — copy measurement, then quit (crosshair/container)"
+            color: RulerTheme.primaryTextColor
+            font.pointSize: RulerTheme.controlsValuePointSize
+        }
+
+        Text {
+            text: "Enter / click rectangle — copy drag/shrink selection, then quit"
+            visible: !root.sessionMode
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }

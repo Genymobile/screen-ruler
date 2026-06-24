@@ -21,6 +21,7 @@ Window {
     readonly property int modeDynamicEdge: 0
     readonly property int modeRectDrag: 1
     readonly property int modeContainerTrace: 2
+    readonly property int modeShrinkToFit: 3
     property int activeMode: modeDynamicEdge
     property real pointerX: 0
     property real pointerY: 0
@@ -62,24 +63,29 @@ Window {
     property int pendingDestructiveKey: -1
     property string pendingDestructiveMessage: ""
     property string sessionActionFeedbackMessage: ""
+    property bool suppressNextQuickConfirmClick: false
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
     readonly property int destructiveActionConfirmMs: 1500
     readonly property int sessionActionFeedbackMs: 1200
 
+    function isRectSelectionMode(mode) {
+        return mode === modeRectDrag || mode === modeShrinkToFit
+    }
+
     function setActiveMode(mode) {
         clearPendingDestructiveAction()
         cancelExportSelection()
-        var clamped = Math.max(modeDynamicEdge, Math.min(modeContainerTrace, mode))
+        var clamped = Math.max(modeDynamicEdge, Math.min(modeShrinkToFit, mode))
         if (activeMode === clamped)
             return
         activeMode = clamped
-        if (activeMode !== modeRectDrag) {
+        if (!isRectSelectionMode(activeMode)) {
             rectDragActive = false
             rectHasSelection = false
             snappedPointerIsSnapped = false
-        } else {
+        } else if (activeMode === modeRectDrag) {
             refreshSnappedPointer()
         }
         if (activeMode !== modeContainerTrace) {
@@ -87,6 +93,33 @@ Window {
         } else {
             refreshContainerSelection()
         }
+    }
+
+    function clearRectSelection() {
+        rectDragActive = false
+        rectHasSelection = false
+        suppressNextQuickConfirmClick = false
+    }
+
+    function hasQuickRectSelectionResult() {
+        return !sessionMode
+                && isRectSelectionMode(activeMode)
+                && rectHasSelection
+                && !rectDragActive
+                && rectWidth > 2
+                && rectHeight > 2
+    }
+
+    function copyCurrentMeasurementAndQuit() {
+        if (!hasBackend)
+            return
+        backend.copyTextToClipboardAndQuit(activeMeasurementText(false))
+    }
+
+    function confirmQuickRectSelectionCopy() {
+        if (!hasQuickRectSelectionResult())
+            return
+        copyCurrentMeasurementAndQuit()
     }
 
     readonly property real sessionBorderProximity: Math.max(
@@ -111,6 +144,7 @@ Window {
             return
         clearPendingDestructiveAction()
         cancelExportSelection()
+        clearRectSelection()
         sessionMode = enabled
         if (!enabled && hasBackend)
             backend.clearAnnotations()
@@ -190,6 +224,10 @@ Window {
             cancelExportSelection()
             return
         }
+        if (hasQuickRectSelectionResult()) {
+            clearRectSelection()
+            return
+        }
         if (sessionMode) {
             requestDestructiveAction(Qt.Key_Escape)
             return
@@ -253,28 +291,48 @@ Window {
         return { x: x, y: y, snapped: false }
     }
 
+    function dragPointerX() {
+        return activeMode === modeRectDrag ? snappedPointerX : pointerX
+    }
+
+    function dragPointerY() {
+        return activeMode === modeRectDrag ? snappedPointerY : pointerY
+    }
+
     function beginRectDrag() {
         rectDragActive = true
         rectHasSelection = true
-        rectStartX = snappedPointerX
-        rectStartY = snappedPointerY
-        rectEndX = snappedPointerX
-        rectEndY = snappedPointerY
+        rectStartX = dragPointerX()
+        rectStartY = dragPointerY()
+        rectEndX = dragPointerX()
+        rectEndY = dragPointerY()
     }
 
     function updateRectDrag() {
         if (!rectDragActive)
             return
-        rectEndX = snappedPointerX
-        rectEndY = snappedPointerY
+        rectEndX = dragPointerX()
+        rectEndY = dragPointerY()
     }
 
     function endRectDrag() {
         if (!rectDragActive)
             return
-        rectEndX = snappedPointerX
-        rectEndY = snappedPointerY
+        rectEndX = dragPointerX()
+        rectEndY = dragPointerY()
         rectDragActive = false
+    }
+
+    function applyShrinkToFitOnCurrentRect() {
+        if (!hasBackend || activeMode !== modeShrinkToFit || !rectHasSelection)
+            return
+        var contracted = backend.shrinkRectToContent(rectLeft, rectTop, rectWidth, rectHeight)
+        if (!contracted || !contracted.available)
+            return
+        rectStartX = contracted.x
+        rectStartY = contracted.y
+        rectEndX = contracted.x + contracted.width
+        rectEndY = contracted.y + contracted.height
     }
 
     function clampSensitivity(value) {
@@ -326,6 +384,7 @@ Window {
             activeMode !== modeDynamicEdge
             && activeMode !== modeRectDrag
             && activeMode !== modeContainerTrace
+            && activeMode !== modeShrinkToFit
         )
             return
 
@@ -343,11 +402,12 @@ Window {
 
     function canCopyCurrentMeasurement() {
         return activeMode === modeDynamicEdge
+               || (isRectSelectionMode(activeMode) && rectHasSelection)
                || (activeMode === modeContainerTrace && containerHasSelection)
     }
 
     function canAnnotateCurrentMeasurement() {
-        if (activeMode === modeRectDrag)
+        if (isRectSelectionMode(activeMode))
             return rectHasSelection
         if (activeMode === modeContainerTrace)
             return containerHasSelection
@@ -432,9 +492,9 @@ Window {
                 westEnd: backend.westEnd,
                 eastEnd: backend.eastEnd,
             }
-        } else if (activeMode === modeRectDrag) {
+        } else if (isRectSelectionMode(activeMode)) {
             data = {
-                mode: modeRectDrag,
+                mode: activeMode,
                 x: rectLeft,
                 y: rectTop,
                 width: rectWidth,
@@ -466,6 +526,8 @@ Window {
             return
         }
         backend.addAnnotation(data)
+        if (isRectSelectionMode(activeMode))
+            clearRectSelection()
     }
 
     function showStartupHelpOverlay() {
@@ -508,7 +570,7 @@ Window {
     }
 
     function activeMeasurementText(includeUnit) {
-        if (activeMode === modeRectDrag)
+        if (isRectSelectionMode(activeMode))
             return Format.roundedPair(rectWidth, rectHeight, includeUnit)
         if (activeMode === modeContainerTrace)
             return Format.roundedPair(containerWidth, containerHeight, includeUnit)
@@ -517,17 +579,17 @@ Window {
         return Format.roundedPair(widthPx, heightPx, includeUnit)
     }
 
-    readonly property real labelX: activeMode === modeRectDrag
+    readonly property real labelX: isRectSelectionMode(activeMode)
                                             ? rectLeft + RulerTheme.baseMargin
                                             : (activeMode === modeContainerTrace
                                                 ? containerX + RulerTheme.baseMargin
                                                 : (hasBackend ? backend.cursorX : -RulerTheme.baseMargin) + RulerTheme.baseMargin)
-    readonly property real labelY: activeMode === modeRectDrag
+    readonly property real labelY: isRectSelectionMode(activeMode)
                                             ? rectTop + RulerTheme.labelOffsetY
                                             : (activeMode === modeContainerTrace
                                                 ? containerY + RulerTheme.labelOffsetY
                                                 : (hasBackend ? backend.cursorY : -RulerTheme.labelOffsetY) + RulerTheme.labelOffsetY)
-    readonly property bool labelVisible: activeMode === modeRectDrag
+    readonly property bool labelVisible: isRectSelectionMode(activeMode)
                                                   ? rectHasSelection
                                                   : (activeMode === modeContainerTrace
                                                       ? containerHasSelection
@@ -594,6 +656,11 @@ Window {
     }
 
     Shortcut {
+        sequence: "4"
+        onActivated: root.setActiveMode(modeShrinkToFit)
+    }
+
+    Shortcut {
         sequence: "Ctrl+C"
         onActivated: {
             root.clearPendingDestructiveAction()
@@ -647,6 +714,16 @@ Window {
     }
 
     Shortcut {
+        sequence: "Enter"
+        onActivated: root.confirmQuickRectSelectionCopy()
+    }
+
+    Shortcut {
+        sequence: "Return"
+        onActivated: root.confirmQuickRectSelectionCopy()
+    }
+
+    Shortcut {
         sequence: "?"
         onActivated: {
             root.clearPendingDestructiveAction()
@@ -686,8 +763,10 @@ Window {
         enabled: hasBackend
         activeMode: root.activeMode
         modeRectDrag: root.modeRectDrag
+        modeShrinkToFit: root.modeShrinkToFit
         canCopy: root.canCopyCurrentMeasurement()
         sessionMode: root.sessionMode
+        quickRectConfirmPending: root.hasQuickRectSelectionResult()
 
         onPointerPressed: (x, y, button) => {
             root.clearPendingDestructiveAction()
@@ -698,7 +777,9 @@ Window {
                     root.beginExportDrag(x, y)
                 return
             }
-            if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
+            if (root.isRectSelectionMode(root.activeMode)
+                    && button === Qt.LeftButton
+                    && (root.sessionMode || !root.hasQuickRectSelectionResult()))
                 root.beginRectDrag()
         }
 
@@ -708,7 +789,7 @@ Window {
                 root.updateExportDrag(x, y)
                 return
             }
-            if (root.activeMode === modeRectDrag)
+            if (root.isRectSelectionMode(root.activeMode))
                 root.updateRectDrag()
         }
 
@@ -721,11 +802,16 @@ Window {
                 }
                 return
             }
-            if (root.activeMode === modeRectDrag && button === Qt.LeftButton) {
+            if (root.isRectSelectionMode(root.activeMode) && button === Qt.LeftButton) {
+                var hadActiveDrag = root.rectDragActive
                 root.endRectDrag()
+                if (root.activeMode === modeShrinkToFit)
+                    root.applyShrinkToFitOnCurrentRect()
                 if (root.sessionMode && root.rectHasSelection
                         && root.rectWidth > 2 && root.rectHeight > 2)
                     root.requestSessionAnnotationPlacement()
+                else if (hadActiveDrag && !root.sessionMode && root.hasQuickRectSelectionResult())
+                    root.suppressNextQuickConfirmClick = true
             }
         }
 
@@ -735,9 +821,15 @@ Window {
                 return
             if (root.sessionMode)
                 return
-            if (!hasBackend)
+            if (root.hasQuickRectSelectionResult()) {
+                if (root.suppressNextQuickConfirmClick) {
+                    root.suppressNextQuickConfirmClick = false
+                    return
+                }
+                root.confirmQuickRectSelectionCopy()
                 return
-            backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
+            }
+            root.copyCurrentMeasurementAndQuit()
         }
 
         onSessionClickRequested: (x, y) => {
@@ -746,7 +838,7 @@ Window {
                 return
             root.updatePointer(x, y)
             // Rect drag commits on mouse release, not via click
-            if (root.activeMode === modeRectDrag)
+            if (root.isRectSelectionMode(root.activeMode))
                 return
             if (!root.sessionMode || !root.canAnnotateCurrentMeasurement())
                 return
@@ -917,6 +1009,17 @@ Window {
         textValue: "Composite export: drag a rectangle to copy image to clipboard"
     }
 
+    OverlayMessageBubble {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        bubbleVisible: root.hasQuickRectSelectionResult()
+        z: 45
+        maxWidth: parent.width - 80
+        textPointSize: RulerTheme.controlsValuePointSize + 2
+        verticalPadding: 9
+        textValue: "Selection ready: click or press Enter to copy to clipboard and exit"
+    }
+
     Rectangle {
         visible: root.sessionMode
         z: 35
@@ -1027,7 +1130,8 @@ Window {
         y: root.rectTop
         width: root.rectWidth
         height: root.rectHeight
-        visible: root.activeMode === modeRectDrag && root.rectHasSelection && !root.exportSelectionActive
+        animateGeometry: root.activeMode === modeShrinkToFit && !root.rectDragActive
+        visible: root.isRectSelectionMode(root.activeMode) && root.rectHasSelection && !root.exportSelectionActive
         z: 1
     }
 
@@ -1037,6 +1141,7 @@ Window {
         y: root.containerY
         width: root.containerWidth
         height: root.containerHeight
+        animateGeometry: true
         visible: root.activeMode === modeContainerTrace && root.containerHasSelection && !root.exportSelectionActive
         z: 1
     }
@@ -1047,6 +1152,7 @@ Window {
         y: root.exportTop
         width: root.exportWidth
         height: root.exportHeight
+        animateGeometry: false
         visible: root.exportSelectionActive && root.exportHasSelection
         z: 9
     }

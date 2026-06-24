@@ -639,7 +639,7 @@ class TestAnnotationModel:
         markdown = backend.annotationsToMarkdown()
         assert markdown == (
             "- Crosshair @ (412, 230): 48 × 32 px\n"
-            "- Container @ (100, 80): 320 × 200 px"
+            "- Rectangle @ (100, 80): 320 × 200 px"
         )
 
     def test_annotations_to_markdown_accepts_float_mode_values(self):
@@ -719,3 +719,68 @@ class TestAnnotationModel:
 
         assert result is True
         assert copied_sizes == [(7, 4)]
+
+
+class TestShrinkRectToContent:
+    """Tests for shrink-to-fit rectangle refinement."""
+
+    def _backend(self, edge_map: np.ndarray, dpr_x: float = 1.0, dpr_y: float = 1.0) -> RulerBackend:
+        from PyQt6.QtGui import QImage
+
+        h, w = edge_map.shape
+        source_image = QImage(max(1, w), max(1, h), QImage.Format.Format_RGB32)
+        return RulerBackend(
+            edge_map=edge_map,
+            dpr_x=dpr_x,
+            dpr_y=dpr_y,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=max(1, w),
+            virtual_h=max(1, h),
+            source_image=source_image,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+    def test_shrink_rect_to_content_contracts_to_edge_bounds(self):
+        edge_map = np.zeros((20, 20), dtype=bool)
+        edge_map[4:13, 4] = True
+        edge_map[4:13, 12] = True
+        edge_map[4, 4:13] = True
+        edge_map[12, 4:13] = True
+        backend = self._backend(edge_map)
+
+        result = backend.shrinkRectToContent(1.0, 1.0, 16.0, 16.0)
+
+        assert result["available"] is True
+        assert result["x"] == 4.0
+        assert result["y"] == 4.0
+        assert result["width"] == 8.0
+        assert result["height"] == 8.0
+
+    def test_shrink_rect_to_content_keeps_side_without_edges(self):
+        edge_map = np.zeros((20, 20), dtype=bool)
+        edge_map[:, 8] = True
+        backend = self._backend(edge_map)
+
+        result = backend.shrinkRectToContent(2.0, 3.0, 14.0, 12.0)
+
+        assert result["available"] is True
+        assert result["x"] == 8.0
+        assert result["y"] == 3.0
+        assert result["width"] == 0.0
+        assert result["height"] == 12.0
+
+    def test_shrink_rect_to_content_leaves_tiny_rect_unchanged(self):
+        edge_map = np.zeros((20, 20), dtype=bool)
+        edge_map[:, :] = True
+        backend = self._backend(edge_map)
+
+        result = backend.shrinkRectToContent(3.0, 3.0, 4.0, 4.0)
+
+        assert result["available"] is True
+        assert result["x"] == 3.0
+        assert result["y"] == 3.0
+        assert result["width"] == 4.0
+        assert result["height"] == 4.0
