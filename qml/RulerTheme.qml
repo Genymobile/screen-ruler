@@ -51,6 +51,7 @@ QtObject {
 
     readonly property int sensitivitySliderWidth: 240
     readonly property int sensitivityDefaultValue: 85
+    readonly property int selectionTransitionMs: 110
 
     // Session mode UI defaults
     readonly property color sessionModeBadgeColor: accentColor

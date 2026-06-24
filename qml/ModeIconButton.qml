@@ -10,9 +10,24 @@ OverlayActionButton {
     signal modeSelected(int mode)
     isActive: activeMode === modeIndex
 
+    function modeTooltipText(index) {
+        switch (index) {
+        case 0:
+            return "Crosshair"
+        case 1:
+            return "Drag rectangle"
+        case 2:
+            return "Container detection"
+        case 3:
+            return "Shrink-to-fit"
+        default:
+            return "Mode"
+        }
+    }
+
     implicitWidth: RulerTheme.modeButtonSize
     implicitHeight: RulerTheme.modeButtonSize
-    tooltipText: modeIndex === 0 ? "Crosshair" : (modeIndex === 1 ? "Drag rectangle" : "Container detection")
+    tooltipText: modeTooltipText(modeIndex)
     baseBgColor: RulerTheme.modeButtonBgColor
     hoverBgColor: RulerTheme.modeButtonHoverBgColor
     pressedBgColor: RulerTheme.modeButtonPressedBgColor
@@ -73,9 +88,31 @@ OverlayActionButton {
                 ctx.moveTo(cornerX, cornerY - cornerSize)
                 ctx.lineTo(cornerX, cornerY + cornerSize)
                 ctx.stroke()
-            } else {
+            } else if (modeIndex === 2) {
                 ctx.strokeRect(5, 5, width - 10, height - 10)
                 ctx.strokeRect(9, 9, width - 18, height - 18)
+            } else {
+                ctx.strokeRect(5, 5, width - 10, height - 10)
+                ctx.strokeRect(10, 10, width - 20, height - 20)
+                var c = width / 2
+                ctx.beginPath()
+                ctx.moveTo(c, 6)
+                ctx.lineTo(c - 2, 9)
+                ctx.moveTo(c, 6)
+                ctx.lineTo(c + 2, 9)
+                ctx.moveTo(c, height - 6)
+                ctx.lineTo(c - 2, height - 9)
+                ctx.moveTo(c, height - 6)
+                ctx.lineTo(c + 2, height - 9)
+                ctx.moveTo(6, c)
+                ctx.lineTo(9, c - 2)
+                ctx.moveTo(6, c)
+                ctx.lineTo(9, c + 2)
+                ctx.moveTo(width - 6, c)
+                ctx.lineTo(width - 9, c - 2)
+                ctx.moveTo(width - 6, c)
+                ctx.lineTo(width - 9, c + 2)
+                ctx.stroke()
             }
         }
 

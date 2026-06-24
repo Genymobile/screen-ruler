@@ -433,13 +433,64 @@ class RulerBackend(QObject):
         labels = {
             0: "Crosshair",
             1: "Rectangle",
-            2: "Container",
+            2: "Rectangle",
+            3: "Rectangle",
         }
         try:
             mode_key = int(float(mode))
         except (TypeError, ValueError):
             return str(mode)
         return labels.get(mode_key, str(mode))
+
+    def _shrink_rect_to_content_map(
+        self,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+        min_size: int = 5,
+    ) -> tuple[int, int, int, int]:
+        map_h, map_w = self._edge_map.shape
+        clamped_left = max(0, min(left, map_w - 1))
+        clamped_top = max(0, min(top, map_h - 1))
+        clamped_right = max(0, min(right, map_w - 1))
+        clamped_bottom = max(0, min(bottom, map_h - 1))
+
+        if clamped_right < clamped_left:
+            clamped_left, clamped_right = clamped_right, clamped_left
+        if clamped_bottom < clamped_top:
+            clamped_top, clamped_bottom = clamped_bottom, clamped_top
+
+        width = clamped_right - clamped_left
+        height = clamped_bottom - clamped_top
+        if width < min_size or height < min_size:
+            return clamped_left, clamped_top, clamped_right, clamped_bottom
+
+        new_top = clamped_top
+        for row in range(clamped_top, clamped_bottom + 1):
+            if np.any(self._edge_map[row, clamped_left : clamped_right + 1]):
+                new_top = row
+                break
+
+        new_bottom = clamped_bottom
+        for row in range(clamped_bottom, new_top - 1, -1):
+            if np.any(self._edge_map[row, clamped_left : clamped_right + 1]):
+                new_bottom = row
+                break
+
+        new_left = clamped_left
+        for col in range(clamped_left, clamped_right + 1):
+            if np.any(self._edge_map[new_top : new_bottom + 1, col]):
+                new_left = col
+                break
+
+        new_right = clamped_right
+        for col in range(clamped_right, new_left - 1, -1):
+            if np.any(self._edge_map[new_top : new_bottom + 1, col]):
+                new_right = col
+                break
+
+        return new_left, new_top, new_right, new_bottom
 
     @staticmethod
     def _format_coordinate(value: object) -> str:
@@ -465,6 +516,45 @@ class RulerBackend(QObject):
             y = self._format_coordinate(annotation.get("cursorY", annotation.get("y")))
             lines.append(f"- {mode} @ ({x}, {y}): {measurement}")
         return "\n".join(lines)
+
+    @pyqtSlot(float, float, float, float, result="QVariant")
+    def shrinkRectToContent(
+        self,
+        local_x: float,
+        local_y: float,
+        local_width: float,
+        local_height: float,
+    ) -> dict[str, float | bool]:
+        map_h, map_w = self._edge_map.shape
+        x0 = int(round(float(local_x) * self._dpr_x))
+        y0 = int(round(float(local_y) * self._dpr_y))
+        x1 = int(round((float(local_x) + float(local_width)) * self._dpr_x))
+        y1 = int(round((float(local_y) + float(local_height)) * self._dpr_y))
+
+        left = min(x0, x1)
+        right = max(x0, x1)
+        top = min(y0, y1)
+        bottom = max(y0, y1)
+
+        if map_w <= 0 or map_h <= 0:
+            return {
+                "available": False,
+                "x": 0.0,
+                "y": 0.0,
+                "width": 0.0,
+                "height": 0.0,
+            }
+
+        new_left, new_top, new_right, new_bottom = self._shrink_rect_to_content_map(
+            left, top, right, bottom
+        )
+        return {
+            "available": True,
+            "x": float(new_left) / self._dpr_x,
+            "y": float(new_top) / self._dpr_y,
+            "width": float(new_right - new_left) / self._dpr_x,
+            "height": float(new_bottom - new_top) / self._dpr_y,
+        }
 
     def _copy_text_to_clipboard(self, text: str) -> None:
         text = str(text)

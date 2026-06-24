@@ -7,6 +7,8 @@ Button {
     property bool isActive: false
     property string labelText: ""
     property string tooltipText: ""
+    property real cornerRadius: RulerTheme.modeButtonRadius
+    property color labelColor: RulerTheme.primaryTextColor
 
     property color baseBgColor: RulerTheme.modeButtonBgColor
     property color hoverBgColor: RulerTheme.modeButtonHoverBgColor
@@ -25,7 +27,7 @@ Button {
     focusPolicy: Qt.StrongFocus
 
     background: Rectangle {
-        radius: RulerTheme.modeButtonRadius
+        radius: root.cornerRadius
         border.width: 1
         color: root.pressed
                ? root.pressedBgColor
@@ -38,7 +40,7 @@ Button {
     contentItem: Text {
         visible: root.labelText !== ""
         text: root.labelText
-        color: RulerTheme.primaryTextColor
+        color: root.labelColor
         font.pointSize: RulerTheme.controlsValuePointSize
         font.bold: true
         horizontalAlignment: Text.AlignHCenter

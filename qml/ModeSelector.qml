@@ -25,4 +25,10 @@ Row {
         activeMode: root.activeMode
         onModeSelected: (mode) => root.modeSelected(mode)
     }
+
+    ModeIconButton {
+        modeIndex: 3
+        activeMode: root.activeMode
+        onModeSelected: (mode) => root.modeSelected(mode)
+    }
 }

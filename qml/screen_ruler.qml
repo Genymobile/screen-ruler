@@ -21,6 +21,7 @@ Window {
     readonly property int modeDynamicEdge: 0
     readonly property int modeRectDrag: 1
     readonly property int modeContainerTrace: 2
+    readonly property int modeShrinkToFit: 3
     property int activeMode: modeDynamicEdge
     property real pointerX: 0
     property real pointerY: 0
@@ -55,31 +56,39 @@ Window {
     property real containerWidth: 0
     property real containerHeight: 0
     property real rectSnapDistance: 10
-    property bool helpOverlayVisible: false
+    property bool helpOverlayTargetVisible: false
     property bool startupHelpActive: false
     property real helpOverlayOpacity: 0.0
+    readonly property bool helpOverlayVisible: helpOverlayTargetVisible || helpOverlayOpacity > 0.01
     property bool sessionMode: false
+    property bool sessionShrinkCommitPending: false
     property int pendingDestructiveKey: -1
     property string pendingDestructiveMessage: ""
     property string sessionActionFeedbackMessage: ""
+    property bool suppressNextQuickConfirmClick: false
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
     readonly property int destructiveActionConfirmMs: 1500
     readonly property int sessionActionFeedbackMs: 1200
+    readonly property int destructiveSessionToggleButtonKey: -2
+
+    function isRectSelectionMode(mode) {
+        return mode === modeRectDrag || mode === modeShrinkToFit
+    }
 
     function setActiveMode(mode) {
         clearPendingDestructiveAction()
         cancelExportSelection()
-        var clamped = Math.max(modeDynamicEdge, Math.min(modeContainerTrace, mode))
+        var clamped = Math.max(modeDynamicEdge, Math.min(modeShrinkToFit, mode))
         if (activeMode === clamped)
             return
         activeMode = clamped
-        if (activeMode !== modeRectDrag) {
+        if (!isRectSelectionMode(activeMode)) {
             rectDragActive = false
             rectHasSelection = false
             snappedPointerIsSnapped = false
-        } else {
+        } else if (activeMode === modeRectDrag) {
             refreshSnappedPointer()
         }
         if (activeMode !== modeContainerTrace) {
@@ -87,6 +96,43 @@ Window {
         } else {
             refreshContainerSelection()
         }
+    }
+
+    function clearRectSelection() {
+        rectDragActive = false
+        rectHasSelection = false
+        suppressNextQuickConfirmClick = false
+        sessionShrinkCommitPending = false
+        sessionShrinkCommitTimer.stop()
+    }
+
+    function hasValidRectSelection() {
+        return isRectSelectionMode(activeMode)
+                && rectHasSelection
+                && !rectDragActive
+                && rectWidth > 2
+                && rectHeight > 2
+    }
+
+    function hasQuickRectSelectionResult() {
+        return !sessionMode && hasValidRectSelection()
+    }
+
+    function copyCurrentMeasurementAndQuit() {
+        if (!hasBackend)
+            return
+        backend.copyTextToClipboardAndQuit(activeMeasurementText(false))
+    }
+
+    function confirmQuickRectSelectionCopy() {
+        if (!hasQuickRectSelectionResult())
+            return
+        copyCurrentMeasurementAndQuit()
+    }
+
+    function scheduleSessionShrinkCommit() {
+        sessionShrinkCommitPending = true
+        sessionShrinkCommitTimer.restart()
     }
 
     readonly property real sessionBorderProximity: Math.max(
@@ -111,6 +157,7 @@ Window {
             return
         clearPendingDestructiveAction()
         cancelExportSelection()
+        clearRectSelection()
         sessionMode = enabled
         if (!enabled && hasBackend)
             backend.clearAnnotations()
@@ -134,6 +181,8 @@ Window {
     function pendingMessageForKey(key) {
         if (key === Qt.Key_Tab)
             return "Press Tab again to discard annotations"
+        if (key === destructiveSessionToggleButtonKey)
+            return "Click SESSION again to discard annotations"
         if (key === Qt.Key_Escape)
             return "Press Esc again to discard annotations"
         if (key === Qt.Key_Q)
@@ -142,7 +191,7 @@ Window {
     }
 
     function performDestructiveAction(key) {
-        if (key === Qt.Key_Tab) {
+        if (key === Qt.Key_Tab || key === destructiveSessionToggleButtonKey) {
             setSessionMode(false)
             return
         }
@@ -185,9 +234,22 @@ Window {
         requestDestructiveAction(Qt.Key_Tab)
     }
 
+    function handleSessionToggleButtonAction() {
+        if (!sessionMode) {
+            clearPendingDestructiveAction()
+            setSessionMode(true)
+            return
+        }
+        requestDestructiveAction(destructiveSessionToggleButtonKey)
+    }
+
     function handleEscapeAction() {
         if (exportSelectionActive) {
             cancelExportSelection()
+            return
+        }
+        if (hasQuickRectSelectionResult()) {
+            clearRectSelection()
             return
         }
         if (sessionMode) {
@@ -253,28 +315,50 @@ Window {
         return { x: x, y: y, snapped: false }
     }
 
+    function dragPointerX() {
+        return activeMode === modeRectDrag ? snappedPointerX : pointerX
+    }
+
+    function dragPointerY() {
+        return activeMode === modeRectDrag ? snappedPointerY : pointerY
+    }
+
     function beginRectDrag() {
+        sessionShrinkCommitPending = false
+        sessionShrinkCommitTimer.stop()
         rectDragActive = true
         rectHasSelection = true
-        rectStartX = snappedPointerX
-        rectStartY = snappedPointerY
-        rectEndX = snappedPointerX
-        rectEndY = snappedPointerY
+        rectStartX = dragPointerX()
+        rectStartY = dragPointerY()
+        rectEndX = dragPointerX()
+        rectEndY = dragPointerY()
     }
 
     function updateRectDrag() {
         if (!rectDragActive)
             return
-        rectEndX = snappedPointerX
-        rectEndY = snappedPointerY
+        rectEndX = dragPointerX()
+        rectEndY = dragPointerY()
     }
 
     function endRectDrag() {
         if (!rectDragActive)
             return
-        rectEndX = snappedPointerX
-        rectEndY = snappedPointerY
+        rectEndX = dragPointerX()
+        rectEndY = dragPointerY()
         rectDragActive = false
+    }
+
+    function applyShrinkToFitOnCurrentRect() {
+        if (!hasBackend || activeMode !== modeShrinkToFit || !rectHasSelection)
+            return
+        var contracted = backend.shrinkRectToContent(rectLeft, rectTop, rectWidth, rectHeight)
+        if (!contracted || !contracted.available)
+            return
+        rectStartX = contracted.x
+        rectStartY = contracted.y
+        rectEndX = contracted.x + contracted.width
+        rectEndY = contracted.y + contracted.height
     }
 
     function clampSensitivity(value) {
@@ -326,6 +410,7 @@ Window {
             activeMode !== modeDynamicEdge
             && activeMode !== modeRectDrag
             && activeMode !== modeContainerTrace
+            && activeMode !== modeShrinkToFit
         )
             return
 
@@ -343,12 +428,13 @@ Window {
 
     function canCopyCurrentMeasurement() {
         return activeMode === modeDynamicEdge
+               || hasValidRectSelection()
                || (activeMode === modeContainerTrace && containerHasSelection)
     }
 
     function canAnnotateCurrentMeasurement() {
-        if (activeMode === modeRectDrag)
-            return rectHasSelection
+        if (isRectSelectionMode(activeMode))
+            return hasValidRectSelection()
         if (activeMode === modeContainerTrace)
             return containerHasSelection
         return hasBackend && backend.cursorX >= 0
@@ -432,9 +518,9 @@ Window {
                 westEnd: backend.westEnd,
                 eastEnd: backend.eastEnd,
             }
-        } else if (activeMode === modeRectDrag) {
+        } else if (isRectSelectionMode(activeMode)) {
             data = {
-                mode: modeRectDrag,
+                mode: activeMode,
                 x: rectLeft,
                 y: rectTop,
                 width: rectWidth,
@@ -466,49 +552,49 @@ Window {
             return
         }
         backend.addAnnotation(data)
+        if (isRectSelectionMode(activeMode))
+            clearRectSelection()
     }
 
     function showStartupHelpOverlay() {
         startupHelpActive = true
-        helpOverlayVisible = true
+        helpOverlayTargetVisible = true
         helpOverlayOpacity = 1.0
-        helpFadeAnimation.stop()
         helpAutoHideTimer.restart()
     }
 
     function hideHelpOverlay() {
         startupHelpActive = false
         helpAutoHideTimer.stop()
-        helpFadeAnimation.stop()
-        helpOverlayVisible = false
+        helpOverlayTargetVisible = false
         helpOverlayOpacity = 0.0
     }
 
     function dismissStartupHelpOverlay() {
-        if (!startupHelpActive || !helpOverlayVisible)
+        if (!startupHelpActive || !helpOverlayTargetVisible)
             return
         hideHelpOverlay()
     }
 
     function toggleHelpOverlay() {
-        if (helpOverlayVisible) {
+        if (helpOverlayTargetVisible) {
             hideHelpOverlay()
             return
         }
         startupHelpActive = false
-        helpOverlayVisible = true
+        helpAutoHideTimer.stop()
+        helpOverlayTargetVisible = true
         helpOverlayOpacity = 1.0
-        helpFadeAnimation.stop()
     }
 
     function dismissStartupHelpFromPointer() {
-        if (!startupHelpActive || !helpOverlayVisible)
+        if (!startupHelpActive || !helpOverlayTargetVisible)
             return
         hideHelpOverlay()
     }
 
     function activeMeasurementText(includeUnit) {
-        if (activeMode === modeRectDrag)
+        if (isRectSelectionMode(activeMode))
             return Format.roundedPair(rectWidth, rectHeight, includeUnit)
         if (activeMode === modeContainerTrace)
             return Format.roundedPair(containerWidth, containerHeight, includeUnit)
@@ -517,17 +603,17 @@ Window {
         return Format.roundedPair(widthPx, heightPx, includeUnit)
     }
 
-    readonly property real labelX: activeMode === modeRectDrag
+    readonly property real labelX: isRectSelectionMode(activeMode)
                                             ? rectLeft + RulerTheme.baseMargin
                                             : (activeMode === modeContainerTrace
                                                 ? containerX + RulerTheme.baseMargin
                                                 : (hasBackend ? backend.cursorX : -RulerTheme.baseMargin) + RulerTheme.baseMargin)
-    readonly property real labelY: activeMode === modeRectDrag
+    readonly property real labelY: isRectSelectionMode(activeMode)
                                             ? rectTop + RulerTheme.labelOffsetY
                                             : (activeMode === modeContainerTrace
                                                 ? containerY + RulerTheme.labelOffsetY
                                                 : (hasBackend ? backend.cursorY : -RulerTheme.labelOffsetY) + RulerTheme.labelOffsetY)
-    readonly property bool labelVisible: activeMode === modeRectDrag
+    readonly property bool labelVisible: isRectSelectionMode(activeMode)
                                                   ? rectHasSelection
                                                   : (activeMode === modeContainerTrace
                                                       ? containerHasSelection
@@ -594,6 +680,11 @@ Window {
     }
 
     Shortcut {
+        sequence: "4"
+        onActivated: root.setActiveMode(modeShrinkToFit)
+    }
+
+    Shortcut {
         sequence: "Ctrl+C"
         onActivated: {
             root.clearPendingDestructiveAction()
@@ -647,6 +738,16 @@ Window {
     }
 
     Shortcut {
+        sequence: "Enter"
+        onActivated: root.confirmQuickRectSelectionCopy()
+    }
+
+    Shortcut {
+        sequence: "Return"
+        onActivated: root.confirmQuickRectSelectionCopy()
+    }
+
+    Shortcut {
         sequence: "?"
         onActivated: {
             root.clearPendingDestructiveAction()
@@ -686,8 +787,10 @@ Window {
         enabled: hasBackend
         activeMode: root.activeMode
         modeRectDrag: root.modeRectDrag
+        modeShrinkToFit: root.modeShrinkToFit
         canCopy: root.canCopyCurrentMeasurement()
         sessionMode: root.sessionMode
+        quickRectConfirmPending: root.hasQuickRectSelectionResult()
 
         onPointerPressed: (x, y, button) => {
             root.clearPendingDestructiveAction()
@@ -698,7 +801,9 @@ Window {
                     root.beginExportDrag(x, y)
                 return
             }
-            if (root.activeMode === modeRectDrag && button === Qt.LeftButton)
+            if (root.isRectSelectionMode(root.activeMode)
+                    && button === Qt.LeftButton
+                    && (root.sessionMode || !root.hasQuickRectSelectionResult()))
                 root.beginRectDrag()
         }
 
@@ -708,7 +813,7 @@ Window {
                 root.updateExportDrag(x, y)
                 return
             }
-            if (root.activeMode === modeRectDrag)
+            if (root.isRectSelectionMode(root.activeMode))
                 root.updateRectDrag()
         }
 
@@ -721,11 +826,19 @@ Window {
                 }
                 return
             }
-            if (root.activeMode === modeRectDrag && button === Qt.LeftButton) {
+            if (root.isRectSelectionMode(root.activeMode) && button === Qt.LeftButton) {
+                var hadActiveDrag = root.rectDragActive
                 root.endRectDrag()
-                if (root.sessionMode && root.rectHasSelection
-                        && root.rectWidth > 2 && root.rectHeight > 2)
-                    root.requestSessionAnnotationPlacement()
+                if (root.activeMode === modeShrinkToFit)
+                    root.applyShrinkToFitOnCurrentRect()
+                if (root.sessionMode && root.hasValidRectSelection()) {
+                    if (root.activeMode === modeShrinkToFit && hadActiveDrag)
+                        root.scheduleSessionShrinkCommit()
+                    else
+                        root.requestSessionAnnotationPlacement()
+                }
+                else if (hadActiveDrag && !root.sessionMode && root.hasQuickRectSelectionResult())
+                    root.suppressNextQuickConfirmClick = true
             }
         }
 
@@ -735,9 +848,15 @@ Window {
                 return
             if (root.sessionMode)
                 return
-            if (!hasBackend)
+            if (root.hasQuickRectSelectionResult()) {
+                if (root.suppressNextQuickConfirmClick) {
+                    root.suppressNextQuickConfirmClick = false
+                    return
+                }
+                root.confirmQuickRectSelectionCopy()
                 return
-            backend.copyTextToClipboardAndQuit(root.activeMeasurementText(false))
+            }
+            root.copyCurrentMeasurementAndQuit()
         }
 
         onSessionClickRequested: (x, y) => {
@@ -746,7 +865,7 @@ Window {
                 return
             root.updatePointer(x, y)
             // Rect drag commits on mouse release, not via click
-            if (root.activeMode === modeRectDrag)
+            if (root.isRectSelectionMode(root.activeMode))
                 return
             if (!root.sessionMode || !root.canAnnotateCurrentMeasurement())
                 return
@@ -816,52 +935,68 @@ Window {
         }
     }
 
+    OverlayActionButton {
+        id: helpToggleButton
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: RulerTheme.baseMargin
+        anchors.rightMargin: RulerTheme.baseMargin
+        implicitWidth: RulerTheme.modeButtonSize
+        implicitHeight: RulerTheme.modeButtonSize
+        cornerRadius: width / 2
+        labelText: "?"
+        tooltipText: "Toggle shortcut help"
+        isActive: root.helpOverlayTargetVisible
+        activeBgColor: Qt.rgba(0.90, 0.10, 0.37, 0.32)
+        labelColor: isActive ? RulerTheme.accentColor : RulerTheme.primaryTextColor
+        z: 40
+        onClicked: {
+            root.clearPendingDestructiveAction()
+            root.dismissStartupHelpOverlay()
+            root.toggleHelpOverlay()
+        }
+    }
+
     ShortcutHelpOverlay {
         id: helpOverlay
         anchors.top: parent.top
         anchors.right: parent.right
-        anchors.topMargin: RulerTheme.baseMargin
+        anchors.topMargin: RulerTheme.baseMargin + helpToggleButton.height + 8
         anchors.rightMargin: RulerTheme.baseMargin
         overlayVisible: root.helpOverlayVisible
         overlayOpacity: root.helpOverlayOpacity
         sessionMode: root.sessionMode
     }
 
-    Rectangle {
-        id: sessionModeBadge
+    OverlayActionButton {
+        id: sessionModeToggleButton
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.leftMargin: RulerTheme.baseMargin
         anchors.topMargin: RulerTheme.baseMargin
-        visible: root.sessionMode
+        implicitWidth: 96
+        implicitHeight: 30
+        labelText: "SESSION"
+        tooltipText: root.sessionMode ? "Exit session mode" : "Enter session mode"
+        isActive: root.sessionMode
         z: 40
-        radius: RulerTheme.cornerRadius
-        color: RulerTheme.sessionModeBadgeColor
-        opacity: RulerTheme.sessionModeBadgeOpacity
-        width: sessionModeLabel.implicitWidth + RulerTheme.sessionModeBadgeHorizontalPadding
-        height: sessionModeLabel.implicitHeight + RulerTheme.sessionModeBadgeVerticalPadding
-
-        Text {
-            id: sessionModeLabel
-            anchors.centerIn: parent
-            text: "SESSION"
-            color: RulerTheme.primaryTextColor
-            font.pointSize: RulerTheme.controlsValuePointSize
-            font.bold: true
+        onClicked: {
+            root.dismissStartupHelpOverlay()
+            root.handleSessionToggleButtonAction()
         }
     }
 
     Row {
-        anchors.left: sessionModeBadge.right
+        anchors.left: sessionModeToggleButton.right
         anchors.leftMargin: 8
-        anchors.verticalCenter: sessionModeBadge.verticalCenter
+        anchors.verticalCenter: sessionModeToggleButton.verticalCenter
         visible: root.sessionMode
         spacing: 6
         z: 40
 
         OverlayActionButton {
             implicitWidth: 46
-            implicitHeight: sessionModeBadge.height
+            implicitHeight: sessionModeToggleButton.height
             labelText: "MD"
             tooltipText: "Copy annotations as Markdown"
             isActive: false
@@ -876,7 +1011,7 @@ Window {
 
         OverlayActionButton {
             implicitWidth: 52
-            implicitHeight: sessionModeBadge.height
+            implicitHeight: sessionModeToggleButton.height
             labelText: "IMG"
             tooltipText: "Copy annotations as image"
             isActive: root.exportSelectionActive
@@ -917,6 +1052,17 @@ Window {
         textValue: "Composite export: drag a rectangle to copy image to clipboard"
     }
 
+    OverlayMessageBubble {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        bubbleVisible: root.hasQuickRectSelectionResult()
+        z: 45
+        maxWidth: parent.width - 80
+        textPointSize: RulerTheme.controlsValuePointSize + 2
+        verticalPadding: 9
+        textValue: "Selection ready: click or press Enter to copy to clipboard and exit"
+    }
+
     Rectangle {
         visible: root.sessionMode
         z: 35
@@ -942,24 +1088,32 @@ Window {
     }
 
     Timer {
+        id: sessionShrinkCommitTimer
+        interval: RulerTheme.selectionTransitionMs
+        repeat: false
+        onTriggered: {
+            if (!root.sessionShrinkCommitPending)
+                return
+            root.sessionShrinkCommitPending = false
+            if (root.sessionMode
+                    && root.activeMode === modeShrinkToFit
+                    && root.hasValidRectSelection()) {
+                root.requestSessionAnnotationPlacement()
+            }
+        }
+    }
+
+    Timer {
         id: helpAutoHideTimer
         interval: RulerTheme.helpOverlayAutoHideMs
         repeat: false
-        onTriggered: helpFadeAnimation.restart()
+        onTriggered: root.hideHelpOverlay()
     }
 
-    NumberAnimation {
-        id: helpFadeAnimation
-        target: root
-        property: "helpOverlayOpacity"
-        to: 0.0
-        duration: RulerTheme.helpOverlayFadeMs
-        easing.type: Easing.OutQuad
-        onFinished: {
-            if (root.helpOverlayOpacity <= 0.01) {
-                root.helpOverlayVisible = false
-                root.startupHelpActive = false
-            }
+    Behavior on helpOverlayOpacity {
+        NumberAnimation {
+            duration: RulerTheme.helpOverlayFadeMs
+            easing.type: Easing.OutQuad
         }
     }
 
@@ -1027,7 +1181,8 @@ Window {
         y: root.rectTop
         width: root.rectWidth
         height: root.rectHeight
-        visible: root.activeMode === modeRectDrag && root.rectHasSelection && !root.exportSelectionActive
+        animateGeometry: root.activeMode === modeShrinkToFit && !root.rectDragActive
+        visible: root.isRectSelectionMode(root.activeMode) && root.rectHasSelection && !root.exportSelectionActive
         z: 1
     }
 
@@ -1037,6 +1192,7 @@ Window {
         y: root.containerY
         width: root.containerWidth
         height: root.containerHeight
+        animateGeometry: true
         visible: root.activeMode === modeContainerTrace && root.containerHasSelection && !root.exportSelectionActive
         z: 1
     }
@@ -1047,6 +1203,7 @@ Window {
         y: root.exportTop
         width: root.exportWidth
         height: root.exportHeight
+        animateGeometry: false
         visible: root.exportSelectionActive && root.exportHasSelection
         z: 9
     }
