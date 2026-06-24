@@ -55,7 +55,7 @@ Rectangle {
         }
 
         Text {
-            text: "Enter / click rectangle — copy drag/shrink selection, then quit"
+            text: "Enter / click — copy drag/shrink selection, then quit"
             visible: !root.sessionMode
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize

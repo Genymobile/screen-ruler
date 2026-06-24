@@ -106,13 +106,16 @@ Window {
         sessionShrinkCommitTimer.stop()
     }
 
-    function hasQuickRectSelectionResult() {
-        return !sessionMode
-                && isRectSelectionMode(activeMode)
+    function hasValidRectSelection() {
+        return isRectSelectionMode(activeMode)
                 && rectHasSelection
                 && !rectDragActive
                 && rectWidth > 2
                 && rectHeight > 2
+    }
+
+    function hasQuickRectSelectionResult() {
+        return !sessionMode && hasValidRectSelection()
     }
 
     function copyCurrentMeasurementAndQuit() {
@@ -425,13 +428,13 @@ Window {
 
     function canCopyCurrentMeasurement() {
         return activeMode === modeDynamicEdge
-               || (isRectSelectionMode(activeMode) && rectHasSelection)
+               || hasValidRectSelection()
                || (activeMode === modeContainerTrace && containerHasSelection)
     }
 
     function canAnnotateCurrentMeasurement() {
         if (isRectSelectionMode(activeMode))
-            return rectHasSelection
+            return hasValidRectSelection()
         if (activeMode === modeContainerTrace)
             return containerHasSelection
         return hasBackend && backend.cursorX >= 0
@@ -828,8 +831,7 @@ Window {
                 root.endRectDrag()
                 if (root.activeMode === modeShrinkToFit)
                     root.applyShrinkToFitOnCurrentRect()
-                if (root.sessionMode && root.rectHasSelection
-                        && root.rectWidth > 2 && root.rectHeight > 2) {
+                if (root.sessionMode && root.hasValidRectSelection()) {
                     if (root.activeMode === modeShrinkToFit && hadActiveDrag)
                         root.scheduleSessionShrinkCommit()
                     else
@@ -1095,10 +1097,7 @@ Window {
             root.sessionShrinkCommitPending = false
             if (root.sessionMode
                     && root.activeMode === modeShrinkToFit
-                    && root.rectHasSelection
-                    && !root.rectDragActive
-                    && root.rectWidth > 2
-                    && root.rectHeight > 2) {
+                    && root.hasValidRectSelection()) {
                 root.requestSessionAnnotationPlacement()
             }
         }
