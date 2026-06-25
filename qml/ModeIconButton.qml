@@ -22,6 +22,8 @@ OverlayActionButton {
             return "Shrink-to-fit"
         case 4:
             return "Color picker"
+        case 5:
+            return "Point distance"
         default:
             return "Mode"
         }
@@ -142,6 +144,26 @@ OverlayActionButton {
                 // Small droplet near the tip
                 ctx.beginPath()
                 ctx.arc(cx + 6, cy + 5, 1.2, 0, Math.PI * 2)
+                ctx.fill()
+            } else if (modeIndex === 5) {
+                ctx.save()
+                ctx.setLineDash([4, 3])
+                ctx.globalAlpha = 0.65
+                ctx.beginPath()
+                ctx.moveTo(8, 10)
+                ctx.lineTo(20, 10)
+                ctx.lineTo(20, 22)
+                ctx.stroke()
+                ctx.restore()
+
+                ctx.beginPath()
+                ctx.moveTo(8, 10)
+                ctx.lineTo(20, 22)
+                ctx.stroke()
+
+                ctx.beginPath()
+                ctx.arc(8, 10, 2, 0, Math.PI * 2)
+                ctx.arc(20, 22, 2, 0, Math.PI * 2)
                 ctx.fill()
             }
         }

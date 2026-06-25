@@ -480,6 +480,31 @@ class TestAnnotationModel:
         assert stored["text"] == "42 × 8 px"
         assert stored["mode"] == 1
 
+    def test_add_distance_annotation_stores_point_fields(self):
+        backend = self._backend()
+        backend.addAnnotation(
+            self._sample(
+                mode=5,
+                text="dx 30 px, dy 40 px, d 50 px",
+                pointAX=10.0,
+                pointAY=20.0,
+                pointBX=40.0,
+                pointBY=60.0,
+                deltaX=30.0,
+                deltaY=40.0,
+                distance=50.0,
+            )
+        )
+
+        stored = backend.annotations[0]
+        assert stored["pointAX"] == 10.0
+        assert stored["pointAY"] == 20.0
+        assert stored["pointBX"] == 40.0
+        assert stored["pointBY"] == 60.0
+        assert stored["deltaX"] == 30.0
+        assert stored["deltaY"] == 40.0
+        assert stored["distance"] == 50.0
+
     def test_add_multiple_annotations(self):
         backend = self._backend()
         backend.addAnnotation(self._sample(text="A"))
@@ -667,6 +692,26 @@ class TestAnnotationModel:
         markdown = backend.annotationsToMarkdown()
 
         assert markdown == "- Color @ (33, 44): #FF5722 rgb(255, 87, 34)"
+
+    def test_annotations_to_markdown_labels_distance_mode(self):
+        backend = self._backend()
+        backend.addAnnotation(
+            self._sample(
+                mode=5,
+                text="dx 30 px, dy 40 px, d 50 px",
+                pointAX=10.0,
+                pointAY=20.0,
+                pointBX=40.0,
+                pointBY=60.0,
+                deltaX=30.0,
+                deltaY=40.0,
+                distance=50.0,
+            )
+        )
+
+        markdown = backend.annotationsToMarkdown()
+
+        assert markdown == "- Distance: dx 30 px, dy 40 px, d 50 px"
 
     def test_copy_annotations_markdown_to_clipboard_uses_exported_text(self, monkeypatch):
         backend = self._backend()

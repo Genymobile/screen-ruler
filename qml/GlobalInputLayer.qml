@@ -4,6 +4,7 @@ Item {
     required property int activeMode
     required property int modeRectDrag
     required property int modeShrinkToFit
+    required property int modeDistance
     required property bool canCopy
     required property bool sessionMode
     required property bool quickRectConfirmPending
@@ -48,6 +49,11 @@ Item {
                 return
             }
             if (quickRectConfirmPending) {
+                copyRequested()
+                mouse.accepted = true
+                return
+            }
+            if (activeMode === modeDistance) {
                 copyRequested()
                 mouse.accepted = true
                 return
