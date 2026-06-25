@@ -470,6 +470,7 @@ class TestAnnotationModel:
         backend = self._backend()
         backend.addAnnotation(self._sample())
         assert backend.annotationCount == 1
+        assert backend.annotationModel.rowCount() == 1
 
     def test_add_annotation_stores_data(self):
         backend = self._backend()
@@ -494,6 +495,7 @@ class TestAnnotationModel:
         backend.addAnnotation(self._sample())
         backend.removeLastAnnotation()
         assert backend.annotationCount == 1
+        assert backend.annotationModel.rowCount() == 1
 
     def test_remove_last_annotation_removes_correct_item(self):
         backend = self._backend()
@@ -514,6 +516,7 @@ class TestAnnotationModel:
         backend.clearAnnotations()
         assert backend.annotations == []
         assert backend.annotationCount == 0
+        assert backend.annotationModel.rowCount() == 0
 
     def test_clear_annotations_on_empty_is_safe(self):
         backend = self._backend()
@@ -902,3 +905,15 @@ class TestSampleColorAtPoint:
         assert sampled["r"] > 0
         assert sampled["g"] > 0
         assert sampled["b"] > 0
+
+    def test_sample_color_at_point_returns_effective_local_radius_after_dpr_rounding(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        image = QImage(12, 12, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        backend = self._backend(image, edge_w=12, edge_h=12, dpr_x=1.5, dpr_y=1.5)
+
+        sampled = backend.sampleColorAtPoint(4.0, 4.0, 1.0)
+
+        assert sampled["available"] is True
+        assert sampled["sampleRadius"] == pytest.approx(4.0 / 3.0)

@@ -1413,7 +1413,7 @@ Window {
     // Persistent session annotations
     // -----------------------------------------------------------------------
     Repeater {
-        model: hasBackend ? backend.annotations : []
+        model: hasBackend ? backend.annotationModel : null
         delegate: AnnotationItem {
             z: 5
         }

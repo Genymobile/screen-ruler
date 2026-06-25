@@ -9,7 +9,7 @@ import subprocess
 import cv2
 import numpy as np
 
-from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QObject, QPointF, QRect, QRectF, Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QAbstractListModel, QBuffer, QByteArray, QIODevice, QModelIndex, QObject, QPointF, QRect, QRectF, Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QClipboard, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen
 
 from .core import (
@@ -24,6 +24,83 @@ from .overlay import create_debug_edge_overlay_source
 from .platform import is_wayland_session
 
 SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
+
+
+class AnnotationListModel(QAbstractListModel):
+    _ROLE_DEFS = [
+        ("mode", "mode"),
+        ("annotationX", "x"),
+        ("annotationY", "y"),
+        ("annotationWidth", "width"),
+        ("annotationHeight", "height"),
+        ("text", "text"),
+        ("cursorX", "cursorX"),
+        ("cursorY", "cursorY"),
+        ("northEnd", "northEnd"),
+        ("southEnd", "southEnd"),
+        ("westEnd", "westEnd"),
+        ("eastEnd", "eastEnd"),
+        ("colorHex", "colorHex"),
+        ("colorRgb", "colorRgb"),
+        ("colorHsl", "colorHsl"),
+        ("colorR", "colorR"),
+        ("colorG", "colorG"),
+        ("colorB", "colorB"),
+        ("sampleRadius", "sampleRadius"),
+    ]
+    _ROLE_IDS: dict[str, int] = {}
+    _ROLE_NAMES: dict[int, bytes] = {}
+    _SOURCE_KEY_BY_ROLE_ID: dict[int, str] = {}
+    for role_index, (role_name, source_key) in enumerate(_ROLE_DEFS):
+        role_id = Qt.ItemDataRole.UserRole + role_index + 1
+        _ROLE_IDS[role_name] = role_id
+        _ROLE_NAMES[role_id] = role_name.encode("utf-8")
+        _SOURCE_KEY_BY_ROLE_ID[role_id] = source_key
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._rows: list[dict] = []
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+        if not index.isValid():
+            return None
+        row = index.row()
+        if row < 0 or row >= len(self._rows):
+            return None
+        source_key = self._SOURCE_KEY_BY_ROLE_ID.get(role)
+        if source_key is None:
+            return None
+        return self._rows[row].get(source_key)
+
+    def roleNames(self) -> dict[int, bytes]:
+        return self._ROLE_NAMES
+
+    def append(self, annotation: dict) -> None:
+        row = len(self._rows)
+        self.beginInsertRows(QModelIndex(), row, row)
+        self._rows.append(dict(annotation))
+        self.endInsertRows()
+
+    def pop_last(self) -> dict | None:
+        if not self._rows:
+            return None
+        row = len(self._rows) - 1
+        self.beginRemoveRows(QModelIndex(), row, row)
+        annotation = self._rows.pop()
+        self.endRemoveRows()
+        return annotation
+
+    def clear(self) -> None:
+        if not self._rows:
+            return
+        self.beginResetModel()
+        self._rows.clear()
+        self.endResetModel()
 
 
 class RulerBackend(QObject):
@@ -79,6 +156,7 @@ class RulerBackend(QObject):
         self._region_labels: np.ndarray | None = None
         self._region_stats: np.ndarray | None = None
         self._annotations: list[dict] = []
+        self._annotation_model = AnnotationListModel(self)
         self._redo_stack: list[dict] = []
         self._gaussian_kernel_cache: dict[int, list[tuple[int, int, float]]] = {}
 
@@ -390,13 +468,19 @@ class RulerBackend(QObject):
     def annotations(self) -> list[dict]:
         return list(self._annotations)
 
+    @pyqtProperty(QObject, constant=True)
+    def annotationModel(self) -> QObject:
+        return self._annotation_model
+
     @pyqtProperty(int, notify=annotationsChanged)
     def annotationCount(self) -> int:
         return len(self._annotations)
 
     @pyqtSlot("QVariantMap")
     def addAnnotation(self, data: dict) -> None:
-        self._annotations.append(dict(data))
+        annotation = self._normalize_annotation(data)
+        self._annotations.append(annotation)
+        self._annotation_model.append(annotation)
         self._redo_stack.clear()
         self.annotationsChanged.emit()
 
@@ -404,21 +488,54 @@ class RulerBackend(QObject):
     def removeLastAnnotation(self) -> None:
         if self._annotations:
             self._redo_stack.append(self._annotations.pop())
+            self._annotation_model.pop_last()
             self.annotationsChanged.emit()
 
     @pyqtSlot()
     def redoAnnotation(self) -> None:
         if self._redo_stack:
-            self._annotations.append(self._redo_stack.pop())
+            annotation = self._normalize_annotation(self._redo_stack.pop())
+            self._annotations.append(annotation)
+            self._annotation_model.append(annotation)
             self.annotationsChanged.emit()
 
     @pyqtSlot()
     def clearAnnotations(self) -> None:
         changed = bool(self._annotations) or bool(self._redo_stack)
         self._annotations.clear()
+        self._annotation_model.clear()
         self._redo_stack.clear()
         if changed:
             self.annotationsChanged.emit()
+
+    @staticmethod
+    def _normalize_annotation(data: dict) -> dict:
+        annotation = dict(data)
+        defaults = {
+            "mode": 0,
+            "x": 0.0,
+            "y": 0.0,
+            "width": 0.0,
+            "height": 0.0,
+            "text": "",
+            "cursorX": 0.0,
+            "cursorY": 0.0,
+            "northEnd": 0.0,
+            "southEnd": 0.0,
+            "westEnd": 0.0,
+            "eastEnd": 0.0,
+            "colorHex": "#000000",
+            "colorRgb": "rgb(0, 0, 0)",
+            "colorHsl": "hsl(0, 0%, 0%)",
+            "colorR": 0,
+            "colorG": 0,
+            "colorB": 0,
+            "sampleRadius": 0.0,
+        }
+        for key, value in defaults.items():
+            if key not in annotation:
+                annotation[key] = value
+        return annotation
 
     @staticmethod
     def _format_number(value: object) -> str:

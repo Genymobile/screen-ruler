@@ -1,12 +1,28 @@
 // AnnotationItem.qml
 //
-// Renders one frozen annotation from the session annotation list.
-// modelData is a dict with: mode, x, y, width, height, text,
-// and (for mode 0) cursorX, cursorY, northEnd, southEnd, westEnd, eastEnd.
+// Renders one frozen annotation from the session annotation model.
 
 import QtQuick
 
 Item {
+    id: root
+
+    required property int mode
+    required property real annotationX
+    required property real annotationY
+    required property real annotationWidth
+    required property real annotationHeight
+    required property string text
+    required property real cursorX
+    required property real cursorY
+    required property real northEnd
+    required property real southEnd
+    required property real westEnd
+    required property real eastEnd
+    required property string colorHex
+    required property string colorRgb
+    required property string colorHsl
+    required property real sampleRadius
     anchors.fill: parent
 
     // -----------------------------------------------------------------------
@@ -14,34 +30,35 @@ Item {
     // -----------------------------------------------------------------------
     Canvas {
         anchors.fill: parent
-        visible: modelData.mode === 0
+        visible: root.mode === 0
 
         Component.onCompleted: requestPaint()
+        onVisibleChanged: requestPaint()
 
         onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
 
-            var cx = modelData.cursorX
-            var cy = modelData.cursorY
+            var cx = root.cursorX
+            var cy = root.cursorY
 
             ctx.strokeStyle = RulerTheme.accentColor
             ctx.lineWidth = 1
             ctx.beginPath()
-            ctx.moveTo(cx, modelData.northEnd)
-            ctx.lineTo(cx, modelData.southEnd)
-            ctx.moveTo(modelData.westEnd, cy)
-            ctx.lineTo(modelData.eastEnd, cy)
+            ctx.moveTo(cx, root.northEnd)
+            ctx.lineTo(cx, root.southEnd)
+            ctx.moveTo(root.westEnd, cy)
+            ctx.lineTo(root.eastEnd, cy)
 
             var t = 5
-            ctx.moveTo(cx - t, modelData.northEnd)
-            ctx.lineTo(cx + t, modelData.northEnd)
-            ctx.moveTo(cx - t, modelData.southEnd)
-            ctx.lineTo(cx + t, modelData.southEnd)
-            ctx.moveTo(modelData.westEnd, cy - t)
-            ctx.lineTo(modelData.westEnd, cy + t)
-            ctx.moveTo(modelData.eastEnd, cy - t)
-            ctx.lineTo(modelData.eastEnd, cy + t)
+            ctx.moveTo(cx - t, root.northEnd)
+            ctx.lineTo(cx + t, root.northEnd)
+            ctx.moveTo(cx - t, root.southEnd)
+            ctx.lineTo(cx + t, root.southEnd)
+            ctx.moveTo(root.westEnd, cy - t)
+            ctx.lineTo(root.westEnd, cy + t)
+            ctx.moveTo(root.eastEnd, cy - t)
+            ctx.lineTo(root.eastEnd, cy + t)
             ctx.stroke()
         }
     }
@@ -50,37 +67,37 @@ Item {
     // Selection outline — rectangle-like modes (mode 1/2/3)
     // -----------------------------------------------------------------------
     SelectionOutline {
-        x: modelData.x
-        y: modelData.y
-        width: modelData.width
-        height: modelData.height
-        visible: modelData.mode === 1 || modelData.mode === 2 || modelData.mode === 3
+        x: root.annotationX
+        y: root.annotationY
+        width: root.annotationWidth
+        height: root.annotationHeight
+        visible: root.mode === 1 || root.mode === 2 || root.mode === 3
     }
 
     ColorSampleMarker {
-        markerX: modelData.x
-        markerY: modelData.y
-        sampleRadius: modelData.sampleRadius ? modelData.sampleRadius : 0
-        visible: modelData.mode === 4
+        markerX: root.annotationX
+        markerY: root.annotationY
+        sampleRadius: root.sampleRadius
+        visible: root.mode === 4
     }
 
     ColorSampleBubble {
-        anchorX: modelData.x
-        anchorY: modelData.y
-        swatchColor: modelData.colorHex ? modelData.colorHex : "#000000"
-        hexText: modelData.colorHex ? modelData.colorHex : "#000000"
-        rgbText: modelData.colorRgb ? modelData.colorRgb : "rgb(0, 0, 0)"
-        hslText: modelData.colorHsl ? modelData.colorHsl : "hsl(0, 0%, 0%)"
-        visible: modelData.mode === 4
+        anchorX: root.annotationX
+        anchorY: root.annotationY
+        swatchColor: root.colorHex
+        hexText: root.colorHex
+        rgbText: root.colorRgb
+        hslText: root.colorHsl
+        visible: root.mode === 4
     }
 
     // -----------------------------------------------------------------------
     // Measurement label — all modes
     // -----------------------------------------------------------------------
     MeasurementLabel {
-        anchorX: modelData.mode === 0 ? modelData.cursorX : modelData.x
-        anchorY: modelData.mode === 0 ? modelData.cursorY : modelData.y
-        textValue: modelData.text
-        visible: modelData.mode !== 4
+        anchorX: root.mode === 0 ? root.cursorX : root.annotationX
+        anchorY: root.mode === 0 ? root.cursorY : root.annotationY
+        textValue: root.text
+        visible: root.mode !== 4
     }
 }
