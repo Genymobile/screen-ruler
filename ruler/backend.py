@@ -937,6 +937,27 @@ class RulerBackend(QObject):
             )
             painter.drawText(QPointF(text_x, baseline_y), line)
 
+    @staticmethod
+    def _draw_pixel_circle_mask(
+        painter: QPainter,
+        center_x: float,
+        center_y: float,
+        radius_px: int,
+        fill_color: QColor,
+    ) -> None:
+        radius = max(0, int(radius_px))
+        cx = int(round(center_x))
+        cy = int(round(center_y))
+        radius_sq = radius * radius
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill_color)
+        for py in range(cy - radius, cy + radius + 1):
+            dy = py - cy
+            for px in range(cx - radius, cx + radius + 1):
+                dx = px - cx
+                if dx * dx + dy * dy <= radius_sq:
+                    painter.drawRect(QRectF(px, py, 1.0, 1.0))
+
     def _draw_annotation_overlay(
         self,
         painter: QPainter,
@@ -970,14 +991,19 @@ class RulerBackend(QObject):
             x = self._local_to_image_x(annotation.get("x")) - crop_left
             y = self._local_to_image_y(annotation.get("y")) - crop_top
             avg_dpr = max(1e-6, (self._dpr_x + self._dpr_y) / 2.0)
-            radius = max(0.8, self._to_float(annotation.get("sampleRadius", 0.0)) * avg_dpr)
+            radius = max(0, int(round(self._to_float(annotation.get("sampleRadius", 0.0)) * avg_dpr)))
             marker_arm = max(3.0, 5.0 * ((self._dpr_x + self._dpr_y) / 2.0))
             marker_gap = max(1.0, 2.0 * ((self._dpr_x + self._dpr_y) / 2.0))
-            painter.drawEllipse(QPointF(x, y), radius, radius)
-            painter.drawLine(QPointF(x - marker_arm, y), QPointF(x - marker_gap, y))
-            painter.drawLine(QPointF(x + marker_gap, y), QPointF(x + marker_arm, y))
-            painter.drawLine(QPointF(x, y - marker_arm), QPointF(x, y - marker_gap))
-            painter.drawLine(QPointF(x, y + marker_gap), QPointF(x, y + marker_arm))
+            mask_fill = QColor(accent)
+            mask_fill.setAlphaF(0.22)
+            self._draw_pixel_circle_mask(painter, x, y, radius, mask_fill)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            if radius == 0:
+                painter.drawLine(QPointF(x - marker_arm, y), QPointF(x - marker_gap, y))
+                painter.drawLine(QPointF(x + marker_gap, y), QPointF(x + marker_arm, y))
+                painter.drawLine(QPointF(x, y - marker_arm), QPointF(x, y - marker_gap))
+                painter.drawLine(QPointF(x, y + marker_gap), QPointF(x, y + marker_arm))
             painter.fillRect(QRectF(x - 1.0, y - 1.0, 3.0, 3.0), accent)
             self._draw_annotation_color_bubble(painter, annotation, crop_left, crop_top)
         else:

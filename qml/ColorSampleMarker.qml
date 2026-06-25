@@ -19,30 +19,41 @@ Canvas {
         var ctx = getContext("2d")
         ctx.clearRect(0, 0, width, height)
 
-        var x = Math.round(markerX) + 0.5
-        var y = Math.round(markerY) + 0.5
+        var centerX = Math.round(markerX)
+        var centerY = Math.round(markerY)
+        var x = centerX + 0.5
+        var y = centerY + 0.5
         var arm = 5
         var gap = 2
-        var radius = Math.max(0.8, sampleRadius)
+        var radius = Math.max(0, Math.round(sampleRadius))
+        var radiusSq = radius * radius
 
-        ctx.strokeStyle = markerColor
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.arc(x, y, radius, 0, Math.PI * 2)
-        ctx.stroke()
+        ctx.fillStyle = Qt.rgba(markerColor.r, markerColor.g, markerColor.b, 0.22)
+        for (var py = centerY - radius; py <= centerY + radius; py++) {
+            var dy = py - centerY
+            for (var px = centerX - radius; px <= centerX + radius; px++) {
+                var dx = px - centerX
+                if (dx * dx + dy * dy <= radiusSq)
+                    ctx.fillRect(px, py, 1, 1)
+            }
+        }
 
-        ctx.beginPath()
-        ctx.moveTo(x - arm, y)
-        ctx.lineTo(x - gap, y)
-        ctx.moveTo(x + gap, y)
-        ctx.lineTo(x + arm, y)
-        ctx.moveTo(x, y - arm)
-        ctx.lineTo(x, y - gap)
-        ctx.moveTo(x, y + gap)
-        ctx.lineTo(x, y + arm)
-        ctx.stroke()
+        if (radius === 0) {
+            ctx.strokeStyle = markerColor
+            ctx.lineWidth = 1
+            ctx.beginPath()
+            ctx.moveTo(x - arm, y)
+            ctx.lineTo(x - gap, y)
+            ctx.moveTo(x + gap, y)
+            ctx.lineTo(x + arm, y)
+            ctx.moveTo(x, y - arm)
+            ctx.lineTo(x, y - gap)
+            ctx.moveTo(x, y + gap)
+            ctx.lineTo(x, y + arm)
+            ctx.stroke()
+        }
 
         ctx.fillStyle = markerColor
-        ctx.fillRect(Math.round(markerX) - 1, Math.round(markerY) - 1, 3, 3)
+        ctx.fillRect(centerX - 1, centerY - 1, 3, 3)
     }
 }
