@@ -120,6 +120,9 @@ Window {
             sampledColorHex = ""
             sampledColorRgb = ""
             sampledColorHsl = ""
+            sampledColorR = 0
+            sampledColorG = 0
+            sampledColorB = 0
         } else {
             refreshSampledColor()
         }

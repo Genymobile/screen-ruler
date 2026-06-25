@@ -70,25 +70,25 @@ Item {
                 Text {
                     text: root.hexText
                     color: RulerTheme.primaryTextColor
-                    font.family: "DejaVu Sans Mono"
+                    font.family: "DejaVu Sans Mono, Consolas, monospace"
                     font.bold: true
-                    font.pixelSize: 13
+                    font.pointSize: 13
                 }
 
                 Text {
                     text: root.rgbText
                     color: RulerTheme.primaryTextColor
-                    font.family: "DejaVu Sans Mono"
+                    font.family: "DejaVu Sans Mono, Consolas, monospace"
                     font.bold: true
-                    font.pixelSize: 13
+                    font.pointSize: 13
                 }
 
                 Text {
                     text: root.hslText
                     color: RulerTheme.primaryTextColor
-                    font.family: "DejaVu Sans Mono"
+                    font.family: "DejaVu Sans Mono, Consolas, monospace"
                     font.bold: true
-                    font.pixelSize: 13
+                    font.pointSize: 13
                 }
             }
         }

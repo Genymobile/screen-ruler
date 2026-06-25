@@ -80,6 +80,7 @@ class RulerBackend(QObject):
         self._region_stats: np.ndarray | None = None
         self._annotations: list[dict] = []
         self._redo_stack: list[dict] = []
+        self._gaussian_kernel_cache: dict[int, list[tuple[int, int, float]]] = {}
 
         self._recompute_timer = QTimer(self)
         self._recompute_timer.setSingleShot(True)
@@ -519,6 +520,29 @@ class RulerBackend(QObject):
             lines.append(f"- {mode} @ ({x}, {y}): {measurement}")
         return "\n".join(lines)
 
+    def _gaussian_kernel(self, radius_px: int) -> list[tuple[int, int, float]]:
+        cached = self._gaussian_kernel_cache.get(radius_px)
+        if cached is not None:
+            return cached
+
+        if radius_px <= 0:
+            kernel = [(0, 0, 1.0)]
+            self._gaussian_kernel_cache[radius_px] = kernel
+            return kernel
+
+        radius_sq = float(radius_px * radius_px)
+        sigma = max(0.5, radius_px / 2.0)
+        inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma)
+        kernel: list[tuple[int, int, float]] = []
+        for dy in range(-radius_px, radius_px + 1):
+            for dx in range(-radius_px, radius_px + 1):
+                dist_sq = float(dx * dx + dy * dy)
+                if dist_sq > radius_sq:
+                    continue
+                kernel.append((dx, dy, math.exp(-dist_sq * inv_two_sigma_sq)))
+        self._gaussian_kernel_cache[radius_px] = kernel
+        return kernel
+
     def _sample_weighted_color(
         self,
         center_x: int,
@@ -531,31 +555,20 @@ class RulerBackend(QObject):
             color = self._source_image.pixelColor(center_x, center_y)
             return int(color.red()), int(color.green()), int(color.blue())
 
-        min_x = max(0, center_x - radius_px)
-        max_x = min(map_w - 1, center_x + radius_px)
-        min_y = max(0, center_y - radius_px)
-        max_y = min(map_h - 1, center_y + radius_px)
-        radius_sq = float(radius_px * radius_px)
-        sigma = max(0.5, radius_px / 2.0)
-        inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma)
-
         sum_w = 0.0
         sum_r = 0.0
         sum_g = 0.0
         sum_b = 0.0
-        for py in range(min_y, max_y + 1):
-            dy = float(py - center_y)
-            for px in range(min_x, max_x + 1):
-                dx = float(px - center_x)
-                dist_sq = dx * dx + dy * dy
-                if dist_sq > radius_sq:
-                    continue
-                weight = math.exp(-dist_sq * inv_two_sigma_sq)
-                color = self._source_image.pixelColor(px, py)
-                sum_w += weight
-                sum_r += weight * float(color.red())
-                sum_g += weight * float(color.green())
-                sum_b += weight * float(color.blue())
+        for dx, dy, weight in self._gaussian_kernel(radius_px):
+            px = center_x + dx
+            py = center_y + dy
+            if px < 0 or px >= map_w or py < 0 or py >= map_h:
+                continue
+            color = self._source_image.pixelColor(px, py)
+            sum_w += weight
+            sum_r += weight * float(color.red())
+            sum_g += weight * float(color.green())
+            sum_b += weight * float(color.blue())
 
         if sum_w <= 0.0:
             color = self._source_image.pixelColor(center_x, center_y)
@@ -570,7 +583,7 @@ class RulerBackend(QObject):
     @pyqtSlot(float, float, float, result="QVariant")
     def sampleColorAtPoint(
         self, local_x: float, local_y: float, local_radius: float = 0.0
-    ) -> dict[str, str | float | bool]:
+    ) -> dict[str, str | float | int | bool]:
         if self._source_image.isNull():
             return {
                 "available": False,
