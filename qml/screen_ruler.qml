@@ -22,6 +22,7 @@ Window {
     readonly property int modeRectDrag: 1
     readonly property int modeContainerTrace: 2
     readonly property int modeShrinkToFit: 3
+    readonly property int modeColorPicker: 4
     property int activeMode: modeDynamicEdge
     property real pointerX: 0
     property real pointerY: 0
@@ -66,9 +67,24 @@ Window {
     property string pendingDestructiveMessage: ""
     property string sessionActionFeedbackMessage: ""
     property bool suppressNextQuickConfirmClick: false
+    property bool suppressNextSessionClickAnnotation: false
+    property bool sampledColorAvailable: false
+    property real sampledColorX: 0
+    property real sampledColorY: 0
+    property real sampledColorRadius: 0
+    property string sampledColorHex: ""
+    property string sampledColorRgb: ""
+    property string sampledColorHsl: ""
+    property int sampledColorR: 0
+    property int sampledColorG: 0
+    property int sampledColorB: 0
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
+    readonly property int colorSampleRadiusMin: 0
+    readonly property int colorSampleRadiusMax: 24
+    readonly property int colorSampleRadiusStep: 1
+    property real colorSampleRadius: 0
     readonly property int destructiveActionConfirmMs: 1500
     readonly property int sessionActionFeedbackMs: 1200
     readonly property int destructiveSessionToggleButtonKey: -2
@@ -80,7 +96,7 @@ Window {
     function setActiveMode(mode) {
         clearPendingDestructiveAction()
         cancelExportSelection()
-        var clamped = Math.max(modeDynamicEdge, Math.min(modeShrinkToFit, mode))
+        var clamped = Math.max(modeDynamicEdge, Math.min(modeColorPicker, mode))
         if (activeMode === clamped)
             return
         activeMode = clamped
@@ -95,6 +111,20 @@ Window {
             containerHasSelection = false
         } else {
             refreshContainerSelection()
+        }
+        if (activeMode !== modeColorPicker) {
+            sampledColorAvailable = false
+            sampledColorX = 0
+            sampledColorY = 0
+            sampledColorRadius = 0
+            sampledColorHex = ""
+            sampledColorRgb = ""
+            sampledColorHsl = ""
+            sampledColorR = 0
+            sampledColorG = 0
+            sampledColorB = 0
+        } else {
+            refreshSampledColor()
         }
     }
 
@@ -271,6 +301,8 @@ Window {
             refreshSnappedPointer()
         if (activeMode === modeContainerTrace)
             refreshContainerSelection()
+        if (activeMode === modeColorPicker)
+            refreshSampledColor()
     }
 
     function refreshContainerSelection() {
@@ -290,6 +322,47 @@ Window {
         containerWidth = detected.width
         containerHeight = detected.height
         containerHasSelection = true
+    }
+
+    function refreshSampledColor() {
+        if (!hasBackend || activeMode !== modeColorPicker) {
+            sampledColorAvailable = false
+            sampledColorX = 0
+            sampledColorY = 0
+            sampledColorRadius = 0
+            sampledColorHex = ""
+            sampledColorRgb = ""
+            sampledColorHsl = ""
+            sampledColorR = 0
+            sampledColorG = 0
+            sampledColorB = 0
+            return
+        }
+
+        var sampled = backend.sampleColorAtPoint(pointerX, pointerY, colorSampleRadius)
+        if (!sampled || !sampled.available) {
+            sampledColorAvailable = false
+            sampledColorX = 0
+            sampledColorY = 0
+            sampledColorRadius = 0
+            sampledColorHex = ""
+            sampledColorRgb = ""
+            sampledColorHsl = ""
+            sampledColorR = 0
+            sampledColorG = 0
+            sampledColorB = 0
+            return
+        }
+        sampledColorAvailable = true
+        sampledColorX = sampled.x
+        sampledColorY = sampled.y
+        sampledColorRadius = sampled.sampleRadius
+        sampledColorHex = sampled.hex
+        sampledColorRgb = sampled.rgb
+        sampledColorHsl = sampled.hsl
+        sampledColorR = sampled.r
+        sampledColorG = sampled.g
+        sampledColorB = sampled.b
     }
 
     function refreshSnappedPointer() {
@@ -369,6 +442,10 @@ Window {
         return Math.max(rectSnapMin, Math.min(rectSnapMax, value))
     }
 
+    function clampColorSampleRadius(value) {
+        return Math.max(colorSampleRadiusMin, Math.min(colorSampleRadiusMax, value))
+    }
+
     function applySensitivityValue(value) {
         if (!hasBackend)
             return
@@ -381,6 +458,11 @@ Window {
     function applySnapDistanceValue(value) {
         rectSnapDistance = clampRectSnapDistance(value)
         refreshSnappedPointer()
+    }
+
+    function applyColorSampleRadiusValue(value) {
+        colorSampleRadius = clampColorSampleRadius(value)
+        refreshSampledColor()
     }
 
     function adjustSensitivityByWheelSteps(notchSteps) {
@@ -403,6 +485,16 @@ Window {
         applySnapDistanceValue(nextSnap)
     }
 
+    function adjustColorSampleRadiusByWheelSteps(notchSteps) {
+        var currentRadius = controlsPanel.colorSampleSliderValue
+        var nextRadius = currentRadius + notchSteps * colorSampleRadiusStep
+        nextRadius = Math.max(colorSampleRadiusMin, Math.min(colorSampleRadiusMax, nextRadius))
+        if (nextRadius === currentRadius)
+            return
+        controlsPanel.colorSampleSliderValue = nextRadius
+        applyColorSampleRadiusValue(nextRadius)
+    }
+
     function adjustActiveModeSliderByWheel(wheelDeltaY) {
         if (!hasBackend || wheelDeltaY === 0)
             return
@@ -411,6 +503,7 @@ Window {
             && activeMode !== modeRectDrag
             && activeMode !== modeContainerTrace
             && activeMode !== modeShrinkToFit
+            && activeMode !== modeColorPicker
         )
             return
 
@@ -423,6 +516,11 @@ Window {
             return
         }
 
+        if (activeMode === modeColorPicker) {
+            adjustColorSampleRadiusByWheelSteps(notchSteps)
+            return
+        }
+
         adjustSensitivityByWheelSteps(notchSteps)
     }
 
@@ -430,6 +528,7 @@ Window {
         return activeMode === modeDynamicEdge
                || hasValidRectSelection()
                || (activeMode === modeContainerTrace && containerHasSelection)
+               || (activeMode === modeColorPicker && sampledColorAvailable)
     }
 
     function canAnnotateCurrentMeasurement() {
@@ -437,6 +536,8 @@ Window {
             return hasValidRectSelection()
         if (activeMode === modeContainerTrace)
             return containerHasSelection
+        if (activeMode === modeColorPicker)
+            return sampledColorAvailable
         return hasBackend && backend.cursorX >= 0
     }
 
@@ -493,10 +594,13 @@ Window {
 
     function exportCompositeSelectionToClipboardAndExitMode() {
         if (!canExportCompositeRegion())
-            return
-        if (backend.copyCompositeRegionToClipboard(exportLeft, exportTop, exportWidth, exportHeight))
+            return false
+        if (backend.copyCompositeRegionToClipboard(exportLeft, exportTop, exportWidth, exportHeight)) {
             showSessionActionFeedback("Composite image copied to clipboard")
-        cancelExportSelection()
+            cancelExportSelection()
+            return true
+        }
+        return false
     }
 
     function requestSessionAnnotationPlacement() {
@@ -548,6 +652,24 @@ Window {
                 westEnd: containerX,
                 eastEnd: containerX + containerWidth,
             }
+        } else if (activeMode === modeColorPicker) {
+            data = {
+                mode: modeColorPicker,
+                x: sampledColorX,
+                y: sampledColorY,
+                width: 0,
+                height: 0,
+                text: activeMeasurementText(true),
+                cursorX: sampledColorX,
+                cursorY: sampledColorY,
+                colorHex: sampledColorHex,
+                colorRgb: sampledColorRgb,
+                colorHsl: sampledColorHsl,
+                colorR: sampledColorR,
+                colorG: sampledColorG,
+                colorB: sampledColorB,
+                sampleRadius: sampledColorRadius,
+            }
         } else {
             return
         }
@@ -594,6 +716,11 @@ Window {
     }
 
     function activeMeasurementText(includeUnit) {
+        if (activeMode === modeColorPicker) {
+            if (!sampledColorAvailable)
+                return ""
+            return sampledColorHex + " " + sampledColorRgb + " " + sampledColorHsl
+        }
         if (isRectSelectionMode(activeMode))
             return Format.roundedPair(rectWidth, rectHeight, includeUnit)
         if (activeMode === modeContainerTrace)
@@ -603,21 +730,27 @@ Window {
         return Format.roundedPair(widthPx, heightPx, includeUnit)
     }
 
-    readonly property real labelX: isRectSelectionMode(activeMode)
-                                            ? rectLeft + RulerTheme.baseMargin
-                                            : (activeMode === modeContainerTrace
-                                                ? containerX + RulerTheme.baseMargin
-                                                : (hasBackend ? backend.cursorX : -RulerTheme.baseMargin) + RulerTheme.baseMargin)
-    readonly property real labelY: isRectSelectionMode(activeMode)
-                                            ? rectTop + RulerTheme.labelOffsetY
-                                            : (activeMode === modeContainerTrace
-                                                ? containerY + RulerTheme.labelOffsetY
-                                                : (hasBackend ? backend.cursorY : -RulerTheme.labelOffsetY) + RulerTheme.labelOffsetY)
+    readonly property real labelAnchorX: isRectSelectionMode(activeMode)
+                                                 ? rectLeft
+                                                 : (activeMode === modeContainerTrace
+                                                     ? containerX
+                                                     : (activeMode === modeColorPicker
+                                                         ? sampledColorX
+                                                         : (hasBackend ? backend.cursorX : 0)))
+    readonly property real labelAnchorY: isRectSelectionMode(activeMode)
+                                                 ? rectTop
+                                                 : (activeMode === modeContainerTrace
+                                                     ? containerY
+                                                     : (activeMode === modeColorPicker
+                                                         ? sampledColorY
+                                                         : (hasBackend ? backend.cursorY : 0)))
     readonly property bool labelVisible: isRectSelectionMode(activeMode)
                                                   ? rectHasSelection
                                                   : (activeMode === modeContainerTrace
                                                       ? containerHasSelection
-                                                      : (hasBackend && backend.cursorX >= 0))
+                                                      : (activeMode === modeColorPicker
+                                                          ? sampledColorAvailable
+                                                          : (hasBackend && backend.cursorX >= 0)))
 
     readonly property int edgePreviewHoldMs: 1000
     readonly property int edgePreviewFadeMs: 1000
@@ -682,6 +815,11 @@ Window {
     Shortcut {
         sequence: "4"
         onActivated: root.setActiveMode(modeShrinkToFit)
+    }
+
+    Shortcut {
+        sequence: "5"
+        onActivated: root.setActiveMode(modeColorPicker)
     }
 
     Shortcut {
@@ -821,8 +959,11 @@ Window {
             root.updatePointer(x, y)
             if (root.exportSelectionActive) {
                 if (button === Qt.LeftButton) {
+                    var hadActiveExportDrag = root.exportDragActive
                     root.finishExportDrag(x, y)
-                    root.exportCompositeSelectionToClipboardAndExitMode()
+                    var exported = root.exportCompositeSelectionToClipboardAndExitMode()
+                    if (hadActiveExportDrag && exported)
+                        root.suppressNextSessionClickAnnotation = true
                 }
                 return
             }
@@ -863,6 +1004,10 @@ Window {
             root.clearPendingDestructiveAction()
             if (root.exportSelectionActive)
                 return
+            if (root.suppressNextSessionClickAnnotation) {
+                root.suppressNextSessionClickAnnotation = false
+                return
+            }
             root.updatePointer(x, y)
             // Rect drag commits on mouse release, not via click
             if (root.isRectSelectionMode(root.activeMode))
@@ -887,6 +1032,7 @@ Window {
         anchors.topMargin: RulerTheme.baseMargin
         activeMode: root.activeMode
         modeRectDrag: root.modeRectDrag
+        modeColorPicker: root.modeColorPicker
         hasBackend: root.hasBackend
         sensitivityMin: root.sensitivityMin
         sensitivityMax: root.sensitivityMax
@@ -897,6 +1043,10 @@ Window {
         rectSnapMax: root.rectSnapMax
         rectSnapStep: root.rectSnapStep
         rectSnapDistance: root.rectSnapDistance
+        colorSampleRadiusMin: root.colorSampleRadiusMin
+        colorSampleRadiusMax: root.colorSampleRadiusMax
+        colorSampleRadiusStep: root.colorSampleRadiusStep
+        colorSampleRadius: root.colorSampleRadius
 
         onPanelPressed: { root.clearPendingDestructiveAction(); root.dismissStartupHelpOverlay() }
         onModeSelected: (mode) => { root.dismissStartupHelpOverlay(); root.setActiveMode(mode) }
@@ -909,6 +1059,11 @@ Window {
             root.clearPendingDestructiveAction()
             root.dismissStartupHelpOverlay()
             root.applySnapDistanceValue(value)
+        }
+        onColorSampleRadiusMoved: (value) => {
+            root.clearPendingDestructiveAction()
+            root.dismissStartupHelpOverlay()
+            root.applyColorSampleRadiusValue(value)
         }
     }
 
@@ -930,8 +1085,11 @@ Window {
                 controlsPanel.sensitivitySliderValue = backend.sensitivity
             if (!controlsPanel.snapSliderPressed)
                 controlsPanel.snapSliderValue = root.rectSnapDistance
+            if (!controlsPanel.colorSampleSliderPressed)
+                controlsPanel.colorSampleSliderValue = root.colorSampleRadius
             root.refreshSnappedPointer()
             root.refreshContainerSelection()
+            root.refreshSampledColor()
         }
     }
 
@@ -1215,13 +1373,39 @@ Window {
         isSnapped: root.snappedPointerIsSnapped
     }
 
+    ColorSampleMarker {
+        markerX: root.sampledColorX
+        markerY: root.sampledColorY
+        sampleRadius: root.sampledColorRadius
+        visible: root.activeMode === modeColorPicker && root.sampledColorAvailable && !root.exportSelectionActive
+        z: 3
+    }
+
+    ColorSampleBubble {
+        anchorX: root.sampledColorX
+        anchorY: root.sampledColorY
+        swatchColor: Qt.rgba(
+                         Math.max(0, Math.min(255, root.sampledColorR)) / 255.0,
+                         Math.max(0, Math.min(255, root.sampledColorG)) / 255.0,
+                         Math.max(0, Math.min(255, root.sampledColorB)) / 255.0,
+                         1.0
+                     )
+        hexText: root.sampledColorHex
+        rgbText: root.sampledColorRgb
+        hslText: root.sampledColorHsl
+        visible: root.activeMode === modeColorPicker && root.sampledColorAvailable && !root.exportSelectionActive
+        z: 4
+    }
+
     // -----------------------------------------------------------------------
     // Measurement label — semi-transparent box, positioned near cursor
     // -----------------------------------------------------------------------
     MeasurementLabel {
-        labelX: root.labelX
-        labelY: root.labelY
-        visible: root.labelVisible && !root.exportSelectionActive
+        anchorX: root.labelAnchorX
+        anchorY: root.labelAnchorY
+        visible: root.labelVisible
+                 && root.activeMode !== modeColorPicker
+                 && !root.exportSelectionActive
         textValue: root.activeMeasurementText(true)
     }
 
@@ -1229,7 +1413,7 @@ Window {
     // Persistent session annotations
     // -----------------------------------------------------------------------
     Repeater {
-        model: hasBackend ? backend.annotations : []
+        model: hasBackend ? backend.annotationModel : null
         delegate: AnnotationItem {
             z: 5
         }

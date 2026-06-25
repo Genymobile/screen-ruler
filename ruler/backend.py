@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import subprocess
 
 import cv2
 import numpy as np
 
-from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QObject, QPointF, QRect, QRectF, Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QAbstractListModel, QBuffer, QByteArray, QIODevice, QModelIndex, QObject, QPointF, QRect, QRectF, Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QClipboard, QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen
 
 from .core import (
@@ -23,6 +24,83 @@ from .overlay import create_debug_edge_overlay_source
 from .platform import is_wayland_session
 
 SENSITIVITY_RECOMPUTE_DEBOUNCE_MS = 30
+
+
+class AnnotationListModel(QAbstractListModel):
+    _ROLE_DEFS = [
+        ("mode", "mode"),
+        ("annotationX", "x"),
+        ("annotationY", "y"),
+        ("annotationWidth", "width"),
+        ("annotationHeight", "height"),
+        ("text", "text"),
+        ("cursorX", "cursorX"),
+        ("cursorY", "cursorY"),
+        ("northEnd", "northEnd"),
+        ("southEnd", "southEnd"),
+        ("westEnd", "westEnd"),
+        ("eastEnd", "eastEnd"),
+        ("colorHex", "colorHex"),
+        ("colorRgb", "colorRgb"),
+        ("colorHsl", "colorHsl"),
+        ("colorR", "colorR"),
+        ("colorG", "colorG"),
+        ("colorB", "colorB"),
+        ("sampleRadius", "sampleRadius"),
+    ]
+    _ROLE_IDS: dict[str, int] = {}
+    _ROLE_NAMES: dict[int, bytes] = {}
+    _SOURCE_KEY_BY_ROLE_ID: dict[int, str] = {}
+    for role_index, (role_name, source_key) in enumerate(_ROLE_DEFS):
+        role_id = Qt.ItemDataRole.UserRole + role_index + 1
+        _ROLE_IDS[role_name] = role_id
+        _ROLE_NAMES[role_id] = role_name.encode("utf-8")
+        _SOURCE_KEY_BY_ROLE_ID[role_id] = source_key
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._rows: list[dict] = []
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+        if not index.isValid():
+            return None
+        row = index.row()
+        if row < 0 or row >= len(self._rows):
+            return None
+        source_key = self._SOURCE_KEY_BY_ROLE_ID.get(role)
+        if source_key is None:
+            return None
+        return self._rows[row].get(source_key)
+
+    def roleNames(self) -> dict[int, bytes]:
+        return self._ROLE_NAMES
+
+    def append(self, annotation: dict) -> None:
+        row = len(self._rows)
+        self.beginInsertRows(QModelIndex(), row, row)
+        self._rows.append(dict(annotation))
+        self.endInsertRows()
+
+    def pop_last(self) -> dict | None:
+        if not self._rows:
+            return None
+        row = len(self._rows) - 1
+        self.beginRemoveRows(QModelIndex(), row, row)
+        annotation = self._rows.pop()
+        self.endRemoveRows()
+        return annotation
+
+    def clear(self) -> None:
+        if not self._rows:
+            return
+        self.beginResetModel()
+        self._rows.clear()
+        self.endResetModel()
 
 
 class RulerBackend(QObject):
@@ -78,7 +156,9 @@ class RulerBackend(QObject):
         self._region_labels: np.ndarray | None = None
         self._region_stats: np.ndarray | None = None
         self._annotations: list[dict] = []
+        self._annotation_model = AnnotationListModel(self)
         self._redo_stack: list[dict] = []
+        self._gaussian_kernel_cache: dict[int, list[tuple[int, int, float]]] = {}
 
         self._recompute_timer = QTimer(self)
         self._recompute_timer.setSingleShot(True)
@@ -388,13 +468,19 @@ class RulerBackend(QObject):
     def annotations(self) -> list[dict]:
         return list(self._annotations)
 
+    @pyqtProperty(QObject, constant=True)
+    def annotationModel(self) -> QObject:
+        return self._annotation_model
+
     @pyqtProperty(int, notify=annotationsChanged)
     def annotationCount(self) -> int:
         return len(self._annotations)
 
     @pyqtSlot("QVariantMap")
     def addAnnotation(self, data: dict) -> None:
-        self._annotations.append(dict(data))
+        annotation = self._normalize_annotation(data)
+        self._annotations.append(annotation)
+        self._annotation_model.append(annotation)
         self._redo_stack.clear()
         self.annotationsChanged.emit()
 
@@ -402,21 +488,54 @@ class RulerBackend(QObject):
     def removeLastAnnotation(self) -> None:
         if self._annotations:
             self._redo_stack.append(self._annotations.pop())
+            self._annotation_model.pop_last()
             self.annotationsChanged.emit()
 
     @pyqtSlot()
     def redoAnnotation(self) -> None:
         if self._redo_stack:
-            self._annotations.append(self._redo_stack.pop())
+            annotation = self._normalize_annotation(self._redo_stack.pop())
+            self._annotations.append(annotation)
+            self._annotation_model.append(annotation)
             self.annotationsChanged.emit()
 
     @pyqtSlot()
     def clearAnnotations(self) -> None:
         changed = bool(self._annotations) or bool(self._redo_stack)
         self._annotations.clear()
+        self._annotation_model.clear()
         self._redo_stack.clear()
         if changed:
             self.annotationsChanged.emit()
+
+    @staticmethod
+    def _normalize_annotation(data: dict) -> dict:
+        annotation = dict(data)
+        defaults = {
+            "mode": 0,
+            "x": 0.0,
+            "y": 0.0,
+            "width": 0.0,
+            "height": 0.0,
+            "text": "",
+            "cursorX": 0.0,
+            "cursorY": 0.0,
+            "northEnd": 0.0,
+            "southEnd": 0.0,
+            "westEnd": 0.0,
+            "eastEnd": 0.0,
+            "colorHex": "#000000",
+            "colorRgb": "rgb(0, 0, 0)",
+            "colorHsl": "hsl(0, 0%, 0%)",
+            "colorR": 0,
+            "colorG": 0,
+            "colorB": 0,
+            "sampleRadius": 0.0,
+        }
+        for key, value in defaults.items():
+            if key not in annotation:
+                annotation[key] = value
+        return annotation
 
     @staticmethod
     def _format_number(value: object) -> str:
@@ -435,6 +554,7 @@ class RulerBackend(QObject):
             1: "Rectangle",
             2: "Rectangle",
             3: "Rectangle",
+            4: "Color",
         }
         try:
             mode_key = int(float(mode))
@@ -516,6 +636,136 @@ class RulerBackend(QObject):
             y = self._format_coordinate(annotation.get("cursorY", annotation.get("y")))
             lines.append(f"- {mode} @ ({x}, {y}): {measurement}")
         return "\n".join(lines)
+
+    def _gaussian_kernel(self, radius_px: int) -> list[tuple[int, int, float]]:
+        cached = self._gaussian_kernel_cache.get(radius_px)
+        if cached is not None:
+            return cached
+
+        if radius_px <= 0:
+            kernel = [(0, 0, 1.0)]
+            self._gaussian_kernel_cache[radius_px] = kernel
+            return kernel
+
+        radius_sq = float(radius_px * radius_px)
+        sigma = max(0.5, radius_px / 2.0)
+        inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma)
+        kernel: list[tuple[int, int, float]] = []
+        for dy in range(-radius_px, radius_px + 1):
+            for dx in range(-radius_px, radius_px + 1):
+                dist_sq = float(dx * dx + dy * dy)
+                if dist_sq > radius_sq:
+                    continue
+                kernel.append((dx, dy, math.exp(-dist_sq * inv_two_sigma_sq)))
+        self._gaussian_kernel_cache[radius_px] = kernel
+        return kernel
+
+    def _sample_weighted_color(
+        self,
+        center_x: int,
+        center_y: int,
+        radius_px: int,
+        map_w: int,
+        map_h: int,
+    ) -> tuple[int, int, int]:
+        if radius_px <= 0:
+            color = self._source_image.pixelColor(center_x, center_y)
+            return int(color.red()), int(color.green()), int(color.blue())
+
+        sum_w = 0.0
+        sum_r = 0.0
+        sum_g = 0.0
+        sum_b = 0.0
+        for dx, dy, weight in self._gaussian_kernel(radius_px):
+            px = center_x + dx
+            py = center_y + dy
+            if px < 0 or px >= map_w or py < 0 or py >= map_h:
+                continue
+            color = self._source_image.pixelColor(px, py)
+            sum_w += weight
+            sum_r += weight * float(color.red())
+            sum_g += weight * float(color.green())
+            sum_b += weight * float(color.blue())
+
+        if sum_w <= 0.0:
+            color = self._source_image.pixelColor(center_x, center_y)
+            return int(color.red()), int(color.green()), int(color.blue())
+
+        return (
+            int(round(sum_r / sum_w)),
+            int(round(sum_g / sum_w)),
+            int(round(sum_b / sum_w)),
+        )
+
+    @pyqtSlot(float, float, float, result="QVariant")
+    def sampleColorAtPoint(
+        self, local_x: float, local_y: float, local_radius: float = 0.0
+    ) -> dict[str, str | float | int | bool]:
+        if self._source_image.isNull():
+            return {
+                "available": False,
+                "x": float(local_x),
+                "y": float(local_y),
+                "hex": "",
+                "rgb": "",
+                "hsl": "",
+                "r": 0,
+                "g": 0,
+                "b": 0,
+                "h": 0,
+                "s": 0,
+                "l": 0,
+                "sampleRadius": 0.0,
+            }
+
+        map_h, map_w = self._edge_map.shape
+        if map_w <= 0 or map_h <= 0:
+            return {
+                "available": False,
+                "x": float(local_x),
+                "y": float(local_y),
+                "hex": "",
+                "rgb": "",
+                "hsl": "",
+                "r": 0,
+                "g": 0,
+                "b": 0,
+                "h": 0,
+                "s": 0,
+                "l": 0,
+                "sampleRadius": 0.0,
+            }
+
+        ex = max(0, min(int(round(float(local_x) * self._dpr_x)), map_w - 1))
+        ey = max(0, min(int(round(float(local_y) * self._dpr_y)), map_h - 1))
+        avg_dpr = max(1e-6, (self._dpr_x + self._dpr_y) / 2.0)
+        radius_map = max(0, int(round(float(local_radius) * avg_dpr)))
+        sampled_radius_local = float(radius_map) / avg_dpr
+        r, g, b = self._sample_weighted_color(ex, ey, radius_map, map_w, map_h)
+        color = QColor(r, g, b)
+        hex_value = f"#{r:02X}{g:02X}{b:02X}"
+        rgb_value = f"rgb({r}, {g}, {b})"
+        hue = int(color.hslHue())
+        if hue < 0:
+            hue = 0
+        saturation = int(round(color.hslSaturation() * 100 / 255))
+        lightness = int(round(color.lightness() * 100 / 255))
+        hsl_value = f"hsl({hue}, {saturation}%, {lightness}%)"
+        return {
+            "available": True,
+            "x": float(ex) / self._dpr_x,
+            "y": float(ey) / self._dpr_y,
+            "hex": hex_value,
+            "rgb": rgb_value,
+            "hsl": hsl_value,
+            "r": r,
+            "g": g,
+            "b": b,
+            "h": hue,
+            "s": saturation,
+            "l": lightness,
+            "sampleRadius": sampled_radius_local,
+        }
 
     @pyqtSlot(float, float, float, float, result="QVariant")
     def shrinkRectToContent(
@@ -614,6 +864,33 @@ class RulerBackend(QObject):
     def _local_to_image_y(self, value: object) -> float:
         return self._to_float(value) * self._dpr_y
 
+    @staticmethod
+    def _resolve_floating_panel_position(
+        anchor_x: float,
+        anchor_y: float,
+        box_width: float,
+        box_height: float,
+        offset_x: float,
+        offset_y: float,
+        canvas_width: float,
+        canvas_height: float,
+        margin: float = 2.0,
+    ) -> tuple[float, float]:
+        desired_x = anchor_x + offset_x
+        desired_y = anchor_y + offset_y
+
+        if desired_x + box_width <= canvas_width - margin:
+            resolved_x = desired_x
+        else:
+            resolved_x = max(margin, anchor_x - offset_x - box_width)
+
+        if desired_y + box_height <= canvas_height - margin:
+            resolved_y = desired_y
+        else:
+            resolved_y = max(margin, anchor_y - offset_y - box_height)
+
+        return resolved_x, resolved_y
+
     def _draw_annotation_measurement_label(
         self,
         painter: QPainter,
@@ -630,17 +907,15 @@ class RulerBackend(QObject):
         panel_background = QColor("#1A1A1A")
         panel_shadow = QColor(0, 0, 0, int(0.22 * 255))
         text_color = QColor("#FFFFFF")
+        panel_background.setAlphaF(0.9)
 
         mode = int(self._to_float(annotation.get("mode"), 0))
         if mode == 0:
-            base_x = self._local_to_image_x(annotation.get("cursorX"))
-            base_y = self._local_to_image_y(annotation.get("cursorY"))
+            anchor_x = self._local_to_image_x(annotation.get("cursorX"))
+            anchor_y = self._local_to_image_y(annotation.get("cursorY"))
         else:
-            base_x = self._local_to_image_x(annotation.get("x"))
-            base_y = self._local_to_image_y(annotation.get("y"))
-
-        label_x = base_x + label_base_margin * self._dpr_x - crop_left
-        label_y = base_y + label_offset_y * self._dpr_y - crop_top
+            anchor_x = self._local_to_image_x(annotation.get("x"))
+            anchor_y = self._local_to_image_y(annotation.get("y"))
         text_value = str(annotation.get("text", "")).strip()
         if not text_value:
             text_value = (
@@ -658,6 +933,18 @@ class RulerBackend(QObject):
         text_height = metrics.height()
         box_width = text_width + int(label_horizontal_padding * self._dpr_x)
         box_height = text_height + int(label_vertical_padding * self._dpr_y)
+        label_abs_x, label_abs_y = self._resolve_floating_panel_position(
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            box_width=box_width,
+            box_height=box_height,
+            offset_x=label_base_margin * self._dpr_x,
+            offset_y=label_offset_y * self._dpr_y,
+            canvas_width=self._source_image.width(),
+            canvas_height=self._source_image.height(),
+        )
+        label_x = label_abs_x - crop_left
+        label_y = label_abs_y - crop_top
         shadow_x = label_x + label_shadow_offset * self._dpr_x
         shadow_y = label_y + label_shadow_offset * self._dpr_y
 
@@ -680,6 +967,126 @@ class RulerBackend(QObject):
         text_x = label_x + (box_width - text_width) / 2
         text_baseline = label_y + (box_height + metrics.ascent() - metrics.descent()) / 2
         painter.drawText(QPointF(text_x, text_baseline), text_value)
+
+    def _draw_annotation_color_bubble(
+        self,
+        painter: QPainter,
+        annotation: dict,
+        crop_left: int,
+        crop_top: int,
+    ) -> None:
+        panel_background = QColor("#1A1A1A")
+        panel_background.setAlphaF(0.9)
+        panel_shadow = QColor(0, 0, 0, int(0.22 * 255))
+        text_color = QColor("#FFFFFF")
+
+        scale = max(1.0, (self._dpr_x + self._dpr_y) / 2.0)
+        offset_x = (14 + 8) * self._dpr_x
+        offset_y = (4 + 6) * self._dpr_y
+        shadow_offset = 2 * scale
+        horizontal_padding = 18 * scale
+        vertical_padding = 12 * scale
+        row_spacing = 10 * scale
+        line_spacing = 1 * scale
+        swatch_size = 16 * scale
+        corner_radius = 5 * scale
+
+        anchor_x = self._local_to_image_x(annotation.get("x"))
+        anchor_y = self._local_to_image_y(annotation.get("y"))
+        color_hex = str(annotation.get("colorHex", "#000000")).strip() or "#000000"
+        color_rgb = str(annotation.get("colorRgb", "rgb(0, 0, 0)")).strip() or "rgb(0, 0, 0)"
+        color_hsl = str(annotation.get("colorHsl", "hsl(0, 0%, 0%)")).strip() or "hsl(0, 0%, 0%)"
+        lines = [color_hex, color_rgb, color_hsl]
+
+        font = QFont("DejaVu Sans Mono")
+        font.setBold(True)
+        font.setPixelSize(max(1, int(round(13 * scale))))
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        text_col_width = max(metrics.horizontalAdvance(line) for line in lines)
+        line_height = metrics.height()
+        text_col_height = line_height * len(lines) + line_spacing * (len(lines) - 1)
+        row_height = max(swatch_size, text_col_height)
+        row_width = swatch_size + row_spacing + text_col_width
+        box_width = row_width + horizontal_padding
+        box_height = row_height + vertical_padding
+
+        bubble_abs_x, bubble_abs_y = self._resolve_floating_panel_position(
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            box_width=box_width,
+            box_height=box_height,
+            offset_x=offset_x,
+            offset_y=offset_y,
+            canvas_width=self._source_image.width(),
+            canvas_height=self._source_image.height(),
+        )
+        bubble_x = bubble_abs_x - crop_left
+        bubble_y = bubble_abs_y - crop_top
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(panel_shadow)
+        painter.drawRoundedRect(
+            QRectF(
+                bubble_x + shadow_offset,
+                bubble_y + shadow_offset,
+                box_width,
+                box_height,
+            ),
+            corner_radius,
+            corner_radius,
+        )
+
+        painter.setBrush(panel_background)
+        painter.drawRoundedRect(
+            QRectF(bubble_x, bubble_y, box_width, box_height),
+            corner_radius,
+            corner_radius,
+        )
+
+        row_left = bubble_x + (box_width - row_width) / 2
+        row_top = bubble_y + (box_height - row_height) / 2
+
+        swatch_color = QColor(color_hex)
+        if not swatch_color.isValid():
+            swatch_color = QColor("#000000")
+        painter.fillRect(QRectF(row_left, row_top, swatch_size, swatch_size), swatch_color)
+        painter.setPen(QPen(text_color))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(row_left, row_top, swatch_size, swatch_size))
+
+        painter.setPen(text_color)
+        text_x = row_left + swatch_size + row_spacing
+        text_start_y = row_top + (row_height - text_col_height) / 2
+        for index, line in enumerate(lines):
+            baseline_y = (
+                text_start_y
+                + index * (line_height + line_spacing)
+                + metrics.ascent()
+            )
+            painter.drawText(QPointF(text_x, baseline_y), line)
+
+    @staticmethod
+    def _draw_pixel_circle_mask(
+        painter: QPainter,
+        center_x: float,
+        center_y: float,
+        radius_px: int,
+        fill_color: QColor,
+    ) -> None:
+        radius = max(0, int(radius_px))
+        cx = int(round(center_x))
+        cy = int(round(center_y))
+        radius_sq = radius * radius
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill_color)
+        for py in range(cy - radius, cy + radius + 1):
+            dy = py - cy
+            for px in range(cx - radius, cx + radius + 1):
+                dx = px - cx
+                if dx * dx + dy * dy <= radius_sq:
+                    painter.drawRect(QRectF(px, py, 1.0, 1.0))
 
     def _draw_annotation_overlay(
         self,
@@ -710,6 +1117,25 @@ class RulerBackend(QObject):
             painter.drawLine(QPointF(cx - tick, south), QPointF(cx + tick, south))
             painter.drawLine(QPointF(west, cy - tick), QPointF(west, cy + tick))
             painter.drawLine(QPointF(east, cy - tick), QPointF(east, cy + tick))
+        elif mode == 4:
+            x = self._local_to_image_x(annotation.get("x")) - crop_left
+            y = self._local_to_image_y(annotation.get("y")) - crop_top
+            avg_dpr = max(1e-6, (self._dpr_x + self._dpr_y) / 2.0)
+            radius = max(0, int(round(self._to_float(annotation.get("sampleRadius", 0.0)) * avg_dpr)))
+            marker_arm = max(3.0, 5.0 * ((self._dpr_x + self._dpr_y) / 2.0))
+            marker_gap = max(1.0, 2.0 * ((self._dpr_x + self._dpr_y) / 2.0))
+            mask_fill = QColor(accent)
+            mask_fill.setAlphaF(0.22)
+            self._draw_pixel_circle_mask(painter, x, y, radius, mask_fill)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            if radius == 0:
+                painter.drawLine(QPointF(x - marker_arm, y), QPointF(x - marker_gap, y))
+                painter.drawLine(QPointF(x + marker_gap, y), QPointF(x + marker_arm, y))
+                painter.drawLine(QPointF(x, y - marker_arm), QPointF(x, y - marker_gap))
+                painter.drawLine(QPointF(x, y + marker_gap), QPointF(x, y + marker_arm))
+            painter.fillRect(QRectF(x - 1.0, y - 1.0, 3.0, 3.0), accent)
+            self._draw_annotation_color_bubble(painter, annotation, crop_left, crop_top)
         else:
             x = self._local_to_image_x(annotation.get("x")) - crop_left
             y = self._local_to_image_y(annotation.get("y")) - crop_top
@@ -717,7 +1143,8 @@ class RulerBackend(QObject):
             h = max(1.0, self._local_to_image_y(annotation.get("height", 0)))
             painter.drawRect(QRectF(x, y, w, h))
 
-        self._draw_annotation_measurement_label(painter, annotation, crop_left, crop_top)
+        if mode != 4:
+            self._draw_annotation_measurement_label(painter, annotation, crop_left, crop_top)
 
     def buildCompositeImageForRegion(
         self,

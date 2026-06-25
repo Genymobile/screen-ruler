@@ -470,6 +470,7 @@ class TestAnnotationModel:
         backend = self._backend()
         backend.addAnnotation(self._sample())
         assert backend.annotationCount == 1
+        assert backend.annotationModel.rowCount() == 1
 
     def test_add_annotation_stores_data(self):
         backend = self._backend()
@@ -494,6 +495,7 @@ class TestAnnotationModel:
         backend.addAnnotation(self._sample())
         backend.removeLastAnnotation()
         assert backend.annotationCount == 1
+        assert backend.annotationModel.rowCount() == 1
 
     def test_remove_last_annotation_removes_correct_item(self):
         backend = self._backend()
@@ -514,6 +516,7 @@ class TestAnnotationModel:
         backend.clearAnnotations()
         assert backend.annotations == []
         assert backend.annotationCount == 0
+        assert backend.annotationModel.rowCount() == 0
 
     def test_clear_annotations_on_empty_is_safe(self):
         backend = self._backend()
@@ -650,6 +653,21 @@ class TestAnnotationModel:
 
         assert markdown == "- Crosshair @ (1, 2): 10 × 10 px"
 
+    def test_annotations_to_markdown_labels_color_mode(self):
+        backend = self._backend()
+        backend.addAnnotation(
+            self._sample(
+                mode=4,
+                cursorX=33,
+                cursorY=44,
+                text="#FF5722 rgb(255, 87, 34)",
+            )
+        )
+
+        markdown = backend.annotationsToMarkdown()
+
+        assert markdown == "- Color @ (33, 44): #FF5722 rgb(255, 87, 34)"
+
     def test_copy_annotations_markdown_to_clipboard_uses_exported_text(self, monkeypatch):
         backend = self._backend()
         backend.addAnnotation(self._sample(text="A"))
@@ -660,6 +678,36 @@ class TestAnnotationModel:
         backend.copyAnnotationsMarkdownToClipboard()
 
         assert copied == [backend.annotationsToMarkdown()]
+
+    def test_resolve_floating_panel_position_keeps_default_side_when_space_available(self):
+        x, y = RulerBackend._resolve_floating_panel_position(
+            anchor_x=20.0,
+            anchor_y=30.0,
+            box_width=40.0,
+            box_height=20.0,
+            offset_x=14.0,
+            offset_y=4.0,
+            canvas_width=200.0,
+            canvas_height=150.0,
+        )
+
+        assert x == 34.0
+        assert y == 34.0
+
+    def test_resolve_floating_panel_position_flips_when_near_bottom_right(self):
+        x, y = RulerBackend._resolve_floating_panel_position(
+            anchor_x=190.0,
+            anchor_y=145.0,
+            box_width=60.0,
+            box_height=24.0,
+            offset_x=14.0,
+            offset_y=4.0,
+            canvas_width=200.0,
+            canvas_height=150.0,
+        )
+
+        assert x == 116.0
+        assert y == 117.0
 
     def test_build_composite_image_for_region_crops_source_image(self):
         from PyQt6.QtGui import QColor, QImage
@@ -784,3 +832,88 @@ class TestShrinkRectToContent:
         assert result["y"] == 3.0
         assert result["width"] == 4.0
         assert result["height"] == 4.0
+
+
+class TestSampleColorAtPoint:
+    """Tests for color sampling from screenshot image."""
+
+    def _backend(self, source_image, edge_w: int, edge_h: int, dpr_x: float = 1.0, dpr_y: float = 1.0) -> RulerBackend:
+        edge_map = np.zeros((edge_h, edge_w), dtype=bool)
+        return RulerBackend(
+            edge_map=edge_map,
+            dpr_x=dpr_x,
+            dpr_y=dpr_y,
+            virtual_x=0,
+            virtual_y=0,
+            virtual_w=edge_w,
+            virtual_h=edge_h,
+            source_image=source_image,
+            threshold_low=50,
+            threshold_high=150,
+            always_show_debug_overlay=False,
+        )
+
+    def test_sample_color_at_point_returns_hex_and_rgb(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        image = QImage(6, 6, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        image.setPixelColor(2, 3, QColor("#FF5722"))
+        backend = self._backend(image, edge_w=6, edge_h=6)
+
+        sampled = backend.sampleColorAtPoint(2.0, 3.0, 0.0)
+
+        assert sampled["available"] is True
+        assert sampled["hex"] == "#FF5722"
+        assert sampled["rgb"] == "rgb(255, 87, 34)"
+        assert sampled["hsl"] == "hsl(14, 100%, 57%)"
+        assert sampled["r"] == 255
+        assert sampled["g"] == 87
+        assert sampled["b"] == 34
+        assert sampled["sampleRadius"] == 0.0
+
+    def test_sample_color_at_point_respects_dpr_mapping(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        image = QImage(10, 10, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        image.setPixelColor(4, 2, QColor("#3366CC"))
+        backend = self._backend(image, edge_w=10, edge_h=10, dpr_x=2.0, dpr_y=2.0)
+
+        sampled = backend.sampleColorAtPoint(2.0, 1.0, 0.0)
+
+        assert sampled["available"] is True
+        assert sampled["hex"] == "#3366CC"
+        assert sampled["rgb"] == "rgb(51, 102, 204)"
+        assert sampled["hsl"] == "hsl(220, 60%, 50%)"
+
+    def test_sample_color_at_point_averages_circular_region(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        image = QImage(9, 9, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        image.setPixelColor(4, 4, QColor("#FFFFFF"))
+        backend = self._backend(image, edge_w=9, edge_h=9)
+
+        sampled = backend.sampleColorAtPoint(4.0, 4.0, 2.0)
+
+        assert sampled["available"] is True
+        assert sampled["sampleRadius"] == 2.0
+        assert sampled["r"] < 255
+        assert sampled["g"] < 255
+        assert sampled["b"] < 255
+        assert sampled["r"] > 0
+        assert sampled["g"] > 0
+        assert sampled["b"] > 0
+
+    def test_sample_color_at_point_returns_effective_local_radius_after_dpr_rounding(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        image = QImage(12, 12, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        backend = self._backend(image, edge_w=12, edge_h=12, dpr_x=1.5, dpr_y=1.5)
+
+        sampled = backend.sampleColorAtPoint(4.0, 4.0, 1.0)
+
+        assert sampled["available"] is True
+        assert sampled["sampleRadius"] == pytest.approx(4.0 / 3.0)

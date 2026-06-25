@@ -20,6 +20,8 @@ OverlayActionButton {
             return "Container detection"
         case 3:
             return "Shrink-to-fit"
+        case 4:
+            return "Color picker"
         default:
             return "Mode"
         }
@@ -91,7 +93,7 @@ OverlayActionButton {
             } else if (modeIndex === 2) {
                 ctx.strokeRect(5, 5, width - 10, height - 10)
                 ctx.strokeRect(9, 9, width - 18, height - 18)
-            } else {
+            } else if (modeIndex === 3) {
                 ctx.strokeRect(5, 5, width - 10, height - 10)
                 ctx.strokeRect(10, 10, width - 20, height - 20)
                 var c = width / 2
@@ -113,6 +115,34 @@ OverlayActionButton {
                 ctx.moveTo(width - 6, c)
                 ctx.lineTo(width - 9, c + 2)
                 ctx.stroke()
+            } else if (modeIndex === 4) {
+                var cx = width / 2
+                var cy = height / 2
+                ctx.save()
+                ctx.translate(cx + 1, cy - 1)
+                ctx.rotate(-Math.PI / 4)
+
+                // Pipette body
+                ctx.strokeRect(-2, -8, 4, 10)
+
+                // Bulb at the top
+                ctx.beginPath()
+                ctx.arc(0, -9, 3, Math.PI, 0)
+                ctx.stroke()
+
+                // Tip
+                ctx.beginPath()
+                ctx.moveTo(-2, 2)
+                ctx.lineTo(0, 6)
+                ctx.lineTo(2, 2)
+                ctx.closePath()
+                ctx.fill()
+                ctx.restore()
+
+                // Small droplet near the tip
+                ctx.beginPath()
+                ctx.arc(cx + 6, cy + 5, 1.2, 0, Math.PI * 2)
+                ctx.fill()
             }
         }
 

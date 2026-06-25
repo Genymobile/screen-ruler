@@ -5,6 +5,7 @@ Rectangle {
 
     required property int activeMode
     required property int modeRectDrag
+    required property int modeColorPicker
     required property bool hasBackend
     required property real sensitivityMin
     required property real sensitivityMax
@@ -15,19 +16,26 @@ Rectangle {
     required property real rectSnapMax
     required property real rectSnapStep
     required property real rectSnapDistance
+    required property real colorSampleRadiusMin
+    required property real colorSampleRadiusMax
+    required property real colorSampleRadiusStep
+    required property real colorSampleRadius
 
     signal panelPressed()
     signal modeSelected(int mode)
     signal sensitivityMoved(real value)
     signal snapMoved(real value)
+    signal colorSampleRadiusMoved(real value)
 
     readonly property bool sensitivitySliderPressed: sensitivityRow.sliderPressed
     readonly property bool snapSliderPressed: snapRow.sliderPressed
+    readonly property bool colorSampleSliderPressed: colorSampleRow.sliderPressed
     property alias sensitivitySliderValue: sensitivityRow.sliderValue
     property alias snapSliderValue: snapRow.sliderValue
+    property alias colorSampleSliderValue: colorSampleRow.sliderValue
 
     width: RulerTheme.controlsPanelWidth
-    height: root.activeMode === root.modeRectDrag
+    height: (root.activeMode === root.modeRectDrag || root.activeMode === root.modeColorPicker)
             ? RulerTheme.controlsPanelExpandedHeight
             : RulerTheme.controlsPanelCompactHeight
     radius: RulerTheme.cornerRadius
@@ -78,6 +86,19 @@ Rectangle {
             visible: root.activeMode === root.modeRectDrag
             sliderValue: root.rectSnapDistance
             onMoved: (value) => root.snapMoved(value)
+        }
+
+        LabeledSliderRow {
+            id: colorSampleRow
+            anchors.horizontalCenter: parent.horizontalCenter
+            label: "Average (px)"
+            fromValue: root.colorSampleRadiusMin
+            toValue: root.colorSampleRadiusMax
+            stepValue: root.colorSampleRadiusStep
+            sliderEnabled: root.hasBackend && root.activeMode === root.modeColorPicker
+            visible: root.activeMode === root.modeColorPicker
+            sliderValue: root.colorSampleRadius
+            onMoved: (value) => root.colorSampleRadiusMoved(value)
         }
     }
 }

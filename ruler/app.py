@@ -49,10 +49,10 @@ def parse_args() -> argparse.Namespace:
         ),
         epilog=(
             "Mouse interactions:\n"
-            "  - Left click: copy crosshair/container measurement, or confirm drag/shrink selection\n"
-            "  - Mouse wheel: adjust sensitivity\n"
+            "  - Left click: copy crosshair/container/color measurement, or confirm drag/shrink selection\n"
+            "  - Mouse wheel: adjust sensitivity / snap distance / color averaging\n"
             "Keyboard shortcuts:\n"
-            "  - 1 / 2 / 3 / 4: switch measurement mode\n"
+            "  - 1 / 2 / 3 / 4 / 5: switch measurement mode\n"
             "  - Tab: toggle session mode\n"
             "  - Enter: copy drag/shrink selection and quit (quick mode)\n"
             "  - Ctrl+C: copy measurement and quit (quick) / export session annotations as Markdown\n"

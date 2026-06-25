@@ -33,7 +33,7 @@ Rectangle {
         }
 
         Text {
-            text: "1 / 2 / 3 / 4  — switch measurement mode"
+            text: "1 / 2 / 3 / 4 / 5  — switch measurement mode"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
@@ -49,7 +49,7 @@ Rectangle {
         Text {
             text: root.sessionMode
                   ? "Click — place annotation (persistent)"
-                  : "Click — copy measurement, then quit (crosshair/container)"
+                  : "Click — copy measurement (crosshair/container/color), then quit"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
@@ -104,7 +104,7 @@ Rectangle {
         }
 
         Text {
-            text: "Mouse wheel — adjust sensitivity/snap distance"
+            text: "Mouse wheel — adjust sensitivity/snap distance/color averaging"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
