@@ -67,6 +67,7 @@ Window {
     property string pendingDestructiveMessage: ""
     property string sessionActionFeedbackMessage: ""
     property bool suppressNextQuickConfirmClick: false
+    property bool suppressNextSessionClickAnnotation: false
     property bool sampledColorAvailable: false
     property real sampledColorX: 0
     property real sampledColorY: 0
@@ -590,10 +591,13 @@ Window {
 
     function exportCompositeSelectionToClipboardAndExitMode() {
         if (!canExportCompositeRegion())
-            return
-        if (backend.copyCompositeRegionToClipboard(exportLeft, exportTop, exportWidth, exportHeight))
+            return false
+        if (backend.copyCompositeRegionToClipboard(exportLeft, exportTop, exportWidth, exportHeight)) {
             showSessionActionFeedback("Composite image copied to clipboard")
-        cancelExportSelection()
+            cancelExportSelection()
+            return true
+        }
+        return false
     }
 
     function requestSessionAnnotationPlacement() {
@@ -952,8 +956,11 @@ Window {
             root.updatePointer(x, y)
             if (root.exportSelectionActive) {
                 if (button === Qt.LeftButton) {
+                    var hadActiveExportDrag = root.exportDragActive
                     root.finishExportDrag(x, y)
-                    root.exportCompositeSelectionToClipboardAndExitMode()
+                    var exported = root.exportCompositeSelectionToClipboardAndExitMode()
+                    if (hadActiveExportDrag && exported)
+                        root.suppressNextSessionClickAnnotation = true
                 }
                 return
             }
@@ -994,6 +1001,10 @@ Window {
             root.clearPendingDestructiveAction()
             if (root.exportSelectionActive)
                 return
+            if (root.suppressNextSessionClickAnnotation) {
+                root.suppressNextSessionClickAnnotation = false
+                return
+            }
             root.updatePointer(x, y)
             // Rect drag commits on mouse release, not via click
             if (root.isRectSelectionMode(root.activeMode))
