@@ -1167,24 +1167,26 @@ class RulerBackend(QObject):
             ay_local = self._to_float(annotation.get("pointAY"))
             bx_local = self._to_float(annotation.get("pointBX"))
             by_local = self._to_float(annotation.get("pointBY"))
+            scale = max(1.0, (self._dpr_x + self._dpr_y) / 2.0)
             ax = self._local_to_image_x(ax_local) - crop_left
             ay = self._local_to_image_y(ay_local) - crop_top
             bx = self._local_to_image_x(bx_local) - crop_left
             by = self._local_to_image_y(by_local) - crop_top
 
             main_pen = QPen(accent)
-            main_pen.setWidth(2)
+            main_pen.setWidthF(2.0 * scale)
             painter.setPen(main_pen)
             painter.drawLine(QPointF(ax, ay), QPointF(bx, by))
             painter.setBrush(accent)
-            painter.drawEllipse(QPointF(ax, ay), 2.5, 2.5)
-            painter.drawEllipse(QPointF(bx, by), 2.5, 2.5)
+            endpoint_radius = 2.5 * scale
+            painter.drawEllipse(QPointF(ax, ay), endpoint_radius, endpoint_radius)
+            painter.drawEllipse(QPointF(bx, by), endpoint_radius, endpoint_radius)
 
             delta_x_local = bx_local - ax_local
             delta_y_local = by_local - ay_local
             if min(abs(delta_x_local), abs(delta_y_local)) > 8.0:
                 triangle_pen = QPen(QColor(230, 25, 94, int(0.7 * 255)))
-                triangle_pen.setWidth(1)
+                triangle_pen.setWidthF(1.0 * scale)
                 triangle_pen.setStyle(Qt.PenStyle.DashLine)
                 painter.setPen(triangle_pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
