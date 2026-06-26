@@ -3,6 +3,8 @@ import QtQuick
 Rectangle {
     id: root
 
+    required property int activeMode
+    required property int modeDistance
     required property bool overlayVisible
     required property real overlayOpacity
     required property bool sessionMode
@@ -33,7 +35,7 @@ Rectangle {
         }
 
         Text {
-            text: "1 / 2 / 3 / 4 / 5 / 6  — switch measurement mode"
+            text: "Keys 1-6 — switch measurement mode"
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
@@ -47,9 +49,13 @@ Rectangle {
         }
 
         Text {
-            text: root.sessionMode
-                  ? "Click — place annotation (persistent)"
-                  : "Click — copy measurement (crosshair/container/color), then quit"
+            text: root.activeMode === root.modeDistance
+                  ? (root.sessionMode
+                      ? "Click — place point A, then point B (persistent annotation)"
+                      : "Click — place point A, then point B to copy measurement, then quit")
+                  : (root.sessionMode
+                      ? "Click — place annotation (persistent)"
+                      : "Click — copy measurement (crosshair/container/color), then quit")
             color: RulerTheme.primaryTextColor
             font.pointSize: RulerTheme.controlsValuePointSize
         }
