@@ -24,12 +24,15 @@ function distanceValue(distancePx, includeUnit) {
     return includeUnit ? (text + " px") : text
 }
 
-function pointToPointSummary(ax, ay, bx, by) {
+function pointToPointSummary(ax, ay, bx, by, deltaThresholdPx) {
     var deltaX = Math.abs(Math.round(bx - ax))
     var deltaY = Math.abs(Math.round(by - ay))
     var distancePx = Math.sqrt(Math.pow(bx - ax, 2) + Math.pow(by - ay, 2))
-    return "A(" + Math.round(ax) + ", " + Math.round(ay)
+    var summary = "A(" + Math.round(ax) + ", " + Math.round(ay)
             + ") \u2192 B(" + Math.round(bx) + ", " + Math.round(by)
             + ") \u2014 " + distanceValue(distancePx, true)
-            + " (\u0394x=" + deltaX + ", \u0394y=" + deltaY + ")"
+    var threshold = typeof deltaThresholdPx === "number" ? deltaThresholdPx : 8
+    if (Math.min(deltaX, deltaY) > threshold)
+        summary += " (\u0394x=" + deltaX + ", \u0394y=" + deltaY + ")"
+    return summary
 }

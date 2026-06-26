@@ -1251,6 +1251,8 @@ Window {
         anchors.topMargin: RulerTheme.baseMargin + helpToggleButton.height + 8
         anchors.rightMargin: RulerTheme.baseMargin
         activeMode: root.activeMode
+        modeRectDrag: root.modeRectDrag
+        modeShrinkToFit: root.modeShrinkToFit
         modeDistance: root.modeDistance
         overlayVisible: root.helpOverlayVisible
         overlayOpacity: root.helpOverlayOpacity
