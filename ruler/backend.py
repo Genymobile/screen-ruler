@@ -47,6 +47,13 @@ class AnnotationListModel(QAbstractListModel):
         ("colorG", "colorG"),
         ("colorB", "colorB"),
         ("sampleRadius", "sampleRadius"),
+        ("pointAX", "pointAX"),
+        ("pointAY", "pointAY"),
+        ("pointBX", "pointBX"),
+        ("pointBY", "pointBY"),
+        ("deltaX", "deltaX"),
+        ("deltaY", "deltaY"),
+        ("distance", "distance"),
     ]
     _ROLE_IDS: dict[str, int] = {}
     _ROLE_NAMES: dict[int, bytes] = {}
@@ -531,6 +538,13 @@ class RulerBackend(QObject):
             "colorG": 0,
             "colorB": 0,
             "sampleRadius": 0.0,
+            "pointAX": 0.0,
+            "pointAY": 0.0,
+            "pointBX": 0.0,
+            "pointBY": 0.0,
+            "deltaX": 0.0,
+            "deltaY": 0.0,
+            "distance": 0.0,
         }
         for key, value in defaults.items():
             if key not in annotation:
@@ -555,6 +569,7 @@ class RulerBackend(QObject):
             2: "Rectangle",
             3: "Rectangle",
             4: "Color",
+            5: "Distance",
         }
         try:
             mode_key = int(float(mode))
@@ -626,12 +641,16 @@ class RulerBackend(QObject):
 
         lines: list[str] = []
         for annotation in self._annotations:
-            mode = self._annotation_mode_title(annotation.get("mode"))
+            mode_key = int(self._to_float(annotation.get("mode"), 0))
+            mode = self._annotation_mode_title(mode_key)
             measurement = str(annotation.get("text", "")).strip()
             if not measurement:
                 width = self._format_number(annotation.get("width"))
                 height = self._format_number(annotation.get("height"))
                 measurement = f"{width} × {height} px"
+            if mode_key == 5:
+                lines.append(f"- {mode}: {measurement}")
+                continue
             x = self._format_coordinate(annotation.get("cursorX", annotation.get("x")))
             y = self._format_coordinate(annotation.get("cursorY", annotation.get("y")))
             lines.append(f"- {mode} @ ({x}, {y}): {measurement}")
@@ -889,6 +908,11 @@ class RulerBackend(QObject):
         else:
             resolved_y = max(margin, anchor_y - offset_y - box_height)
 
+        max_x = max(margin, canvas_width - box_width - margin)
+        max_y = max(margin, canvas_height - box_height - margin)
+        resolved_x = max(margin, min(resolved_x, max_x))
+        resolved_y = max(margin, min(resolved_y, max_y))
+
         return resolved_x, resolved_y
 
     def _draw_annotation_measurement_label(
@@ -922,6 +946,8 @@ class RulerBackend(QObject):
                 f"{self._format_number(annotation.get('width'))} × "
                 f"{self._format_number(annotation.get('height'))} px"
             )
+        offset_x = self._to_float(annotation.get("labelOffsetX"), label_base_margin)
+        offset_y = self._to_float(annotation.get("labelOffsetY"), label_offset_y)
 
         font = QFont("DejaVu Sans Mono")
         font.setBold(True)
@@ -938,8 +964,8 @@ class RulerBackend(QObject):
             anchor_y=anchor_y,
             box_width=box_width,
             box_height=box_height,
-            offset_x=label_base_margin * self._dpr_x,
-            offset_y=label_offset_y * self._dpr_y,
+            offset_x=offset_x * self._dpr_x,
+            offset_y=offset_y * self._dpr_y,
             canvas_width=self._source_image.width(),
             canvas_height=self._source_image.height(),
         )
@@ -1136,6 +1162,82 @@ class RulerBackend(QObject):
                 painter.drawLine(QPointF(x, y + marker_gap), QPointF(x, y + marker_arm))
             painter.fillRect(QRectF(x - 1.0, y - 1.0, 3.0, 3.0), accent)
             self._draw_annotation_color_bubble(painter, annotation, crop_left, crop_top)
+        elif mode == 5:
+            ax_local = self._to_float(annotation.get("pointAX"))
+            ay_local = self._to_float(annotation.get("pointAY"))
+            bx_local = self._to_float(annotation.get("pointBX"))
+            by_local = self._to_float(annotation.get("pointBY"))
+            scale = max(1.0, (self._dpr_x + self._dpr_y) / 2.0)
+            ax = self._local_to_image_x(ax_local) - crop_left
+            ay = self._local_to_image_y(ay_local) - crop_top
+            bx = self._local_to_image_x(bx_local) - crop_left
+            by = self._local_to_image_y(by_local) - crop_top
+
+            main_pen = QPen(accent)
+            main_pen.setWidthF(2.0 * scale)
+            painter.setPen(main_pen)
+            painter.drawLine(QPointF(ax, ay), QPointF(bx, by))
+            painter.setBrush(accent)
+            endpoint_radius = 2.5 * scale
+            painter.drawEllipse(QPointF(ax, ay), endpoint_radius, endpoint_radius)
+            painter.drawEllipse(QPointF(bx, by), endpoint_radius, endpoint_radius)
+
+            delta_x_local = bx_local - ax_local
+            delta_y_local = by_local - ay_local
+            if min(abs(delta_x_local), abs(delta_y_local)) > 8.0:
+                triangle_pen = QPen(QColor(230, 25, 94, int(0.7 * 255)))
+                triangle_pen.setWidthF(1.0 * scale)
+                triangle_pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(triangle_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawLine(QPointF(ax, ay), QPointF(bx, ay))
+                painter.drawLine(QPointF(bx, ay), QPointF(bx, by))
+
+                self._draw_annotation_measurement_label(
+                    painter,
+                    {
+                        "mode": 5,
+                        "x": (ax_local + bx_local) / 2.0,
+                        "y": ay_local,
+                        "text": f"{self._format_number(abs(delta_x_local))} px",
+                        "labelOffsetX": 0.0,
+                        "labelOffsetY": 8.0 if delta_y_local >= 0 else -28.0,
+                    },
+                    crop_left,
+                    crop_top,
+                )
+                self._draw_annotation_measurement_label(
+                    painter,
+                    {
+                        "mode": 5,
+                        "x": bx_local,
+                        "y": (ay_local + by_local) / 2.0,
+                        "text": f"{self._format_number(abs(delta_y_local))} px",
+                        "labelOffsetX": 10.0 if delta_x_local >= 0 else -10.0,
+                        "labelOffsetY": 0.0 if delta_y_local >= 0 else -20.0,
+                    },
+                    crop_left,
+                    crop_top,
+                )
+
+            distance_value = self._to_float(
+                annotation.get("distance"),
+                math.hypot(delta_x_local, delta_y_local),
+            )
+            safe_distance = max(distance_value, 1e-6)
+            self._draw_annotation_measurement_label(
+                painter,
+                {
+                    "mode": 5,
+                    "x": (ax_local + bx_local) / 2.0,
+                    "y": (ay_local + by_local) / 2.0,
+                    "text": f"{self._format_number(distance_value)} px",
+                    "labelOffsetX": (-delta_y_local / safe_distance) * 14.0,
+                    "labelOffsetY": (delta_x_local / safe_distance) * 14.0,
+                },
+                crop_left,
+                crop_top,
+            )
         else:
             x = self._local_to_image_x(annotation.get("x")) - crop_left
             y = self._local_to_image_y(annotation.get("y")) - crop_top
@@ -1143,7 +1245,7 @@ class RulerBackend(QObject):
             h = max(1.0, self._local_to_image_y(annotation.get("height", 0)))
             painter.drawRect(QRectF(x, y, w, h))
 
-        if mode != 4:
+        if mode != 4 and mode != 5:
             self._draw_annotation_measurement_label(painter, annotation, crop_left, crop_top)
 
     def buildCompositeImageForRegion(

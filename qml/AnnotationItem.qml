@@ -23,6 +23,13 @@ Item {
     required property string colorRgb
     required property string colorHsl
     required property real sampleRadius
+    required property real pointAX
+    required property real pointAY
+    required property real pointBX
+    required property real pointBY
+    required property real deltaX
+    required property real deltaY
+    required property real distance
     anchors.fill: parent
 
     // -----------------------------------------------------------------------
@@ -91,6 +98,15 @@ Item {
         visible: root.mode === 4
     }
 
+    DistanceMeasurementOverlay {
+        anchors.fill: parent
+        pointAX: root.pointAX
+        pointAY: root.pointAY
+        pointBX: root.pointBX
+        pointBY: root.pointBY
+        visible: root.mode === 5
+    }
+
     // -----------------------------------------------------------------------
     // Measurement label — all modes
     // -----------------------------------------------------------------------
@@ -98,6 +114,6 @@ Item {
         anchorX: root.mode === 0 ? root.cursorX : root.annotationX
         anchorY: root.mode === 0 ? root.cursorY : root.annotationY
         textValue: root.text
-        visible: root.mode !== 4
+        visible: root.mode !== 4 && root.mode !== 5
     }
 }

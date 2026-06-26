@@ -6,6 +6,7 @@ Rectangle {
     required property int activeMode
     required property int modeRectDrag
     required property int modeColorPicker
+    required property int modeDistance
     required property bool hasBackend
     required property real sensitivityMin
     required property real sensitivityMax
@@ -35,7 +36,9 @@ Rectangle {
     property alias colorSampleSliderValue: colorSampleRow.sliderValue
 
     width: RulerTheme.controlsPanelWidth
-    height: (root.activeMode === root.modeRectDrag || root.activeMode === root.modeColorPicker)
+    height: (root.activeMode === root.modeRectDrag
+            || root.activeMode === root.modeColorPicker
+            || root.activeMode === root.modeDistance)
             ? RulerTheme.controlsPanelExpandedHeight
             : RulerTheme.controlsPanelCompactHeight
     radius: RulerTheme.cornerRadius
@@ -82,8 +85,9 @@ Rectangle {
             fromValue: root.rectSnapMin
             toValue: root.rectSnapMax
             stepValue: root.rectSnapStep
-            sliderEnabled: root.hasBackend && root.activeMode === root.modeRectDrag
-            visible: root.activeMode === root.modeRectDrag
+            sliderEnabled: root.hasBackend
+                           && (root.activeMode === root.modeRectDrag || root.activeMode === root.modeDistance)
+            visible: root.activeMode === root.modeRectDrag || root.activeMode === root.modeDistance
             sliderValue: root.rectSnapDistance
             onMoved: (value) => root.snapMoved(value)
         }

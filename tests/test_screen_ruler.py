@@ -480,6 +480,31 @@ class TestAnnotationModel:
         assert stored["text"] == "42 × 8 px"
         assert stored["mode"] == 1
 
+    def test_add_distance_annotation_stores_point_fields(self):
+        backend = self._backend()
+        backend.addAnnotation(
+            self._sample(
+                mode=5,
+                text="dx 30 px, dy 40 px, d 50 px",
+                pointAX=10.0,
+                pointAY=20.0,
+                pointBX=40.0,
+                pointBY=60.0,
+                deltaX=30.0,
+                deltaY=40.0,
+                distance=50.0,
+            )
+        )
+
+        stored = backend.annotations[0]
+        assert stored["pointAX"] == 10.0
+        assert stored["pointAY"] == 20.0
+        assert stored["pointBX"] == 40.0
+        assert stored["pointBY"] == 60.0
+        assert stored["deltaX"] == 30.0
+        assert stored["deltaY"] == 40.0
+        assert stored["distance"] == 50.0
+
     def test_add_multiple_annotations(self):
         backend = self._backend()
         backend.addAnnotation(self._sample(text="A"))
@@ -668,6 +693,26 @@ class TestAnnotationModel:
 
         assert markdown == "- Color @ (33, 44): #FF5722 rgb(255, 87, 34)"
 
+    def test_annotations_to_markdown_labels_distance_mode(self):
+        backend = self._backend()
+        backend.addAnnotation(
+            self._sample(
+                mode=5,
+                text="dx 30 px, dy 40 px, d 50 px",
+                pointAX=10.0,
+                pointAY=20.0,
+                pointBX=40.0,
+                pointBY=60.0,
+                deltaX=30.0,
+                deltaY=40.0,
+                distance=50.0,
+            )
+        )
+
+        markdown = backend.annotationsToMarkdown()
+
+        assert markdown == "- Distance: dx 30 px, dy 40 px, d 50 px"
+
     def test_copy_annotations_markdown_to_clipboard_uses_exported_text(self, monkeypatch):
         backend = self._backend()
         backend.addAnnotation(self._sample(text="A"))
@@ -708,6 +753,21 @@ class TestAnnotationModel:
 
         assert x == 116.0
         assert y == 117.0
+
+    def test_resolve_floating_panel_position_clamps_near_top_left(self):
+        x, y = RulerBackend._resolve_floating_panel_position(
+            anchor_x=4.0,
+            anchor_y=4.0,
+            box_width=40.0,
+            box_height=20.0,
+            offset_x=-20.0,
+            offset_y=-20.0,
+            canvas_width=200.0,
+            canvas_height=150.0,
+        )
+
+        assert x == 2.0
+        assert y == 2.0
 
     def test_build_composite_image_for_region_crops_source_image(self):
         from PyQt6.QtGui import QColor, QImage

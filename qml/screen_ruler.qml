@@ -23,6 +23,7 @@ Window {
     readonly property int modeContainerTrace: 2
     readonly property int modeShrinkToFit: 3
     readonly property int modeColorPicker: 4
+    readonly property int modeDistance: 5
     property int activeMode: modeDynamicEdge
     property real pointerX: 0
     property real pointerY: 0
@@ -78,6 +79,9 @@ Window {
     property int sampledColorR: 0
     property int sampledColorG: 0
     property int sampledColorB: 0
+    property bool distanceAwaitingSecondPoint: false
+    property real distancePointAX: 0
+    property real distancePointAY: 0
     readonly property int rectSnapMin: 0
     readonly property int rectSnapMax: 30
     readonly property int rectSnapStep: 1
@@ -96,14 +100,15 @@ Window {
     function setActiveMode(mode) {
         clearPendingDestructiveAction()
         cancelExportSelection()
-        var clamped = Math.max(modeDynamicEdge, Math.min(modeColorPicker, mode))
+        var clamped = Math.max(modeDynamicEdge, Math.min(modeDistance, mode))
         if (activeMode === clamped)
             return
         activeMode = clamped
         if (!isRectSelectionMode(activeMode)) {
             rectDragActive = false
             rectHasSelection = false
-            snappedPointerIsSnapped = false
+            if (activeMode !== modeDistance)
+                snappedPointerIsSnapped = false
         } else if (activeMode === modeRectDrag) {
             refreshSnappedPointer()
         }
@@ -126,6 +131,11 @@ Window {
         } else {
             refreshSampledColor()
         }
+        if (activeMode !== modeDistance) {
+            clearDistanceMeasurement()
+        } else {
+            refreshSnappedPointer()
+        }
     }
 
     function clearRectSelection() {
@@ -134,6 +144,91 @@ Window {
         suppressNextQuickConfirmClick = false
         sessionShrinkCommitPending = false
         sessionShrinkCommitTimer.stop()
+    }
+
+    function clearDistanceMeasurement() {
+        distanceAwaitingSecondPoint = false
+        distancePointAX = 0
+        distancePointAY = 0
+    }
+
+    function distancePreviewPoint() {
+        return {
+            x: snappedPointerX,
+            y: snappedPointerY,
+            snapped: snappedPointerIsSnapped
+        }
+    }
+
+    function distancePointBX() {
+        return distancePreviewPoint().x
+    }
+
+    function distancePointBY() {
+        return distancePreviewPoint().y
+    }
+
+    function distanceMeasurementSummaryText() {
+        if (!distanceAwaitingSecondPoint)
+            return ""
+        var preview = distancePreviewPoint()
+        return Format.pointToPointSummary(distancePointAX, distancePointAY, preview.x, preview.y)
+    }
+
+    function beginDistanceMeasurement() {
+        var point = distancePreviewPoint()
+        distancePointAX = point.x
+        distancePointAY = point.y
+        distanceAwaitingSecondPoint = true
+    }
+
+    function finalizeDistanceMeasurement() {
+        if (!distanceAwaitingSecondPoint || !hasBackend)
+            return
+
+        var pointBX = distancePointBX()
+        var pointBY = distancePointBY()
+        var measurementText = Format.pointToPointSummary(
+                    distancePointAX,
+                    distancePointAY,
+                    pointBX,
+                    pointBY
+                )
+        if (sessionMode) {
+            backend.addAnnotation({
+                mode: modeDistance,
+                x: (distancePointAX + pointBX) / 2,
+                y: (distancePointAY + pointBY) / 2,
+                width: Math.abs(pointBX - distancePointAX),
+                height: Math.abs(pointBY - distancePointAY),
+                text: measurementText,
+                cursorX: distancePointAX,
+                cursorY: distancePointAY,
+                pointAX: distancePointAX,
+                pointAY: distancePointAY,
+                pointBX: pointBX,
+                pointBY: pointBY,
+                deltaX: pointBX - distancePointAX,
+                deltaY: pointBY - distancePointAY,
+                distance: Math.sqrt(
+                              Math.pow(pointBX - distancePointAX, 2)
+                              + Math.pow(pointBY - distancePointAY, 2)
+                          ),
+            })
+            clearDistanceMeasurement()
+            return
+        }
+
+        clearDistanceMeasurement()
+        backend.copyTextToClipboardAndQuit(measurementText)
+    }
+
+    function handleDistanceClickAction() {
+        if (!distanceAwaitingSecondPoint) {
+            beginDistanceMeasurement()
+            return
+        }
+        finalizeDistanceMeasurement()
     }
 
     function hasValidRectSelection() {
@@ -188,6 +283,7 @@ Window {
         clearPendingDestructiveAction()
         cancelExportSelection()
         clearRectSelection()
+        clearDistanceMeasurement()
         sessionMode = enabled
         if (!enabled && hasBackend)
             backend.clearAnnotations()
@@ -278,6 +374,10 @@ Window {
             cancelExportSelection()
             return
         }
+        if (distanceAwaitingSecondPoint) {
+            clearDistanceMeasurement()
+            return
+        }
         if (hasQuickRectSelectionResult()) {
             clearRectSelection()
             return
@@ -297,7 +397,7 @@ Window {
     function updatePointer(x, y) {
         pointerX = x
         pointerY = y
-        if (activeMode === modeRectDrag)
+        if (activeMode === modeRectDrag || activeMode === modeDistance)
             refreshSnappedPointer()
         if (activeMode === modeContainerTrace)
             refreshContainerSelection()
@@ -366,7 +466,7 @@ Window {
     }
 
     function refreshSnappedPointer() {
-        if (activeMode !== modeRectDrag) {
+        if (activeMode !== modeRectDrag && activeMode !== modeDistance) {
             snappedPointerX = pointerX
             snappedPointerY = pointerY
             snappedPointerIsSnapped = false
@@ -504,6 +604,7 @@ Window {
             && activeMode !== modeContainerTrace
             && activeMode !== modeShrinkToFit
             && activeMode !== modeColorPicker
+            && activeMode !== modeDistance
         )
             return
 
@@ -511,7 +612,7 @@ Window {
         if (notchSteps === 0)
             notchSteps = wheelDeltaY > 0 ? 1 : -1
 
-        if (activeMode === modeRectDrag) {
+        if (activeMode === modeRectDrag || activeMode === modeDistance) {
             adjustSnapDistanceByWheelSteps(notchSteps)
             return
         }
@@ -528,6 +629,7 @@ Window {
         return activeMode === modeDynamicEdge
                || hasValidRectSelection()
                || (activeMode === modeContainerTrace && containerHasSelection)
+               || (activeMode === modeDistance && distanceAwaitingSecondPoint)
                || (activeMode === modeColorPicker && sampledColorAvailable)
     }
 
@@ -538,6 +640,8 @@ Window {
             return containerHasSelection
         if (activeMode === modeColorPicker)
             return sampledColorAvailable
+        if (activeMode === modeDistance)
+            return false
         return hasBackend && backend.cursorX >= 0
     }
 
@@ -670,6 +774,8 @@ Window {
                 colorB: sampledColorB,
                 sampleRadius: sampledColorRadius,
             }
+        } else if (activeMode === modeDistance) {
+            return
         } else {
             return
         }
@@ -721,6 +827,8 @@ Window {
                 return ""
             return sampledColorHex + " " + sampledColorRgb + " " + sampledColorHsl
         }
+        if (activeMode === modeDistance)
+            return distanceMeasurementSummaryText()
         if (isRectSelectionMode(activeMode))
             return Format.roundedPair(rectWidth, rectHeight, includeUnit)
         if (activeMode === modeContainerTrace)
@@ -736,21 +844,27 @@ Window {
                                                      ? containerX
                                                      : (activeMode === modeColorPicker
                                                          ? sampledColorX
-                                                         : (hasBackend ? backend.cursorX : 0)))
+                                                         : (activeMode === modeDistance
+                                                             ? ((distancePointAX + distancePointBX()) / 2)
+                                                             : (hasBackend ? backend.cursorX : 0))))
     readonly property real labelAnchorY: isRectSelectionMode(activeMode)
                                                  ? rectTop
                                                  : (activeMode === modeContainerTrace
                                                      ? containerY
                                                      : (activeMode === modeColorPicker
                                                          ? sampledColorY
-                                                         : (hasBackend ? backend.cursorY : 0)))
+                                                         : (activeMode === modeDistance
+                                                             ? ((distancePointAY + distancePointBY()) / 2)
+                                                             : (hasBackend ? backend.cursorY : 0))))
     readonly property bool labelVisible: isRectSelectionMode(activeMode)
                                                   ? rectHasSelection
                                                   : (activeMode === modeContainerTrace
-                                                      ? containerHasSelection
-                                                      : (activeMode === modeColorPicker
+                                                     ? containerHasSelection
+                                                     : (activeMode === modeColorPicker
                                                           ? sampledColorAvailable
-                                                          : (hasBackend && backend.cursorX >= 0)))
+                                                          : (activeMode === modeDistance
+                                                             ? false
+                                                             : (hasBackend && backend.cursorX >= 0))))
 
     readonly property int edgePreviewHoldMs: 1000
     readonly property int edgePreviewFadeMs: 1000
@@ -820,6 +934,11 @@ Window {
     Shortcut {
         sequence: "5"
         onActivated: root.setActiveMode(modeColorPicker)
+    }
+
+    Shortcut {
+        sequence: "6"
+        onActivated: root.setActiveMode(modeDistance)
     }
 
     Shortcut {
@@ -926,6 +1045,7 @@ Window {
         activeMode: root.activeMode
         modeRectDrag: root.modeRectDrag
         modeShrinkToFit: root.modeShrinkToFit
+        modeDistance: root.modeDistance
         canCopy: root.canCopyCurrentMeasurement()
         sessionMode: root.sessionMode
         quickRectConfirmPending: root.hasQuickRectSelectionResult()
@@ -989,6 +1109,10 @@ Window {
                 return
             if (root.sessionMode)
                 return
+            if (root.activeMode === root.modeDistance) {
+                root.handleDistanceClickAction()
+                return
+            }
             if (root.hasQuickRectSelectionResult()) {
                 if (root.suppressNextQuickConfirmClick) {
                     root.suppressNextQuickConfirmClick = false
@@ -1012,6 +1136,10 @@ Window {
             // Rect drag commits on mouse release, not via click
             if (root.isRectSelectionMode(root.activeMode))
                 return
+            if (root.activeMode === root.modeDistance) {
+                root.handleDistanceClickAction()
+                return
+            }
             if (!root.sessionMode || !root.canAnnotateCurrentMeasurement())
                 return
             root.requestSessionAnnotationPlacement()
@@ -1033,6 +1161,7 @@ Window {
         activeMode: root.activeMode
         modeRectDrag: root.modeRectDrag
         modeColorPicker: root.modeColorPicker
+        modeDistance: root.modeDistance
         hasBackend: root.hasBackend
         sensitivityMin: root.sensitivityMin
         sensitivityMax: root.sensitivityMax
@@ -1121,6 +1250,10 @@ Window {
         anchors.right: parent.right
         anchors.topMargin: RulerTheme.baseMargin + helpToggleButton.height + 8
         anchors.rightMargin: RulerTheme.baseMargin
+        activeMode: root.activeMode
+        modeRectDrag: root.modeRectDrag
+        modeShrinkToFit: root.modeShrinkToFit
+        modeDistance: root.modeDistance
         overlayVisible: root.helpOverlayVisible
         overlayOpacity: root.helpOverlayOpacity
         sessionMode: root.sessionMode
@@ -1369,8 +1502,22 @@ Window {
     SnappedPointerMarker {
         markerX: root.snappedPointerX
         markerY: root.snappedPointerY
-        visible: root.activeMode === modeRectDrag && hasBackend && !root.exportSelectionActive
+        visible: (root.activeMode === modeRectDrag || root.activeMode === modeDistance)
+                 && hasBackend
+                 && !root.exportSelectionActive
         isSnapped: root.snappedPointerIsSnapped
+    }
+
+    DistanceMeasurementOverlay {
+        anchors.fill: parent
+        pointAX: root.distancePointAX
+        pointAY: root.distancePointAY
+        pointBX: root.distancePointBX()
+        pointBY: root.distancePointBY()
+        visible: root.activeMode === modeDistance
+                 && root.distanceAwaitingSecondPoint
+                 && !root.exportSelectionActive
+        z: 2
     }
 
     ColorSampleMarker {
@@ -1405,6 +1552,7 @@ Window {
         anchorY: root.labelAnchorY
         visible: root.labelVisible
                  && root.activeMode !== modeColorPicker
+                 && root.activeMode !== modeDistance
                  && !root.exportSelectionActive
         textValue: root.activeMeasurementText(true)
     }
