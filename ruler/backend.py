@@ -908,6 +908,11 @@ class RulerBackend(QObject):
         else:
             resolved_y = max(margin, anchor_y - offset_y - box_height)
 
+        max_x = max(margin, canvas_width - box_width - margin)
+        max_y = max(margin, canvas_height - box_height - margin)
+        resolved_x = max(margin, min(resolved_x, max_x))
+        resolved_y = max(margin, min(resolved_y, max_y))
+
         return resolved_x, resolved_y
 
     def _draw_annotation_measurement_label(

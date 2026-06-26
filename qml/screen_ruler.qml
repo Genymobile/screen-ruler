@@ -153,7 +153,11 @@ Window {
     }
 
     function distancePreviewPoint() {
-        return maybeSnapPoint(pointerX, pointerY)
+        return {
+            x: snappedPointerX,
+            y: snappedPointerY,
+            snapped: snappedPointerIsSnapped
+        }
     }
 
     function distancePointBX() {

@@ -754,6 +754,21 @@ class TestAnnotationModel:
         assert x == 116.0
         assert y == 117.0
 
+    def test_resolve_floating_panel_position_clamps_near_top_left(self):
+        x, y = RulerBackend._resolve_floating_panel_position(
+            anchor_x=4.0,
+            anchor_y=4.0,
+            box_width=40.0,
+            box_height=20.0,
+            offset_x=-20.0,
+            offset_y=-20.0,
+            canvas_width=200.0,
+            canvas_height=150.0,
+        )
+
+        assert x == 2.0
+        assert y == 2.0
+
     def test_build_composite_image_for_region_crops_source_image(self):
         from PyQt6.QtGui import QColor, QImage
 
