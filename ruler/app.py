@@ -105,12 +105,11 @@ def main() -> None:
     args = parse_args()
 
     os.environ["QT_QUICK_CONTROLS_UNIVERSAL_ACCENT"] = "#E6195E"
-    try:
-        from PyQt6.QtQuickControls2 import QQuickStyle
-
-        QQuickStyle.setStyle("Universal")
-    except Exception:
-        os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Universal")
+    # Force the Universal style, overriding any desktop-provided
+    # QT_QUICK_CONTROLS_STYLE (e.g. Hyprland exports org.hyprland.style,
+    # which the bundled Qt cannot load). PyQt6 has no QtQuickControls2
+    # binding, so the environment variable is the only way to set it.
+    os.environ["QT_QUICK_CONTROLS_STYLE"] = "Universal"
 
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Screen Ruler")
