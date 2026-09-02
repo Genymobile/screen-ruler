@@ -1,0 +1,11 @@
+[package]
+name = "ruler-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Platform-agnostic capture, edge-detection, measurement, color, clipboard, export and state logic for screen-ruler."
+
+[dependencies]
+
+[dev-dependencies]

@@ -6,3 +6,6 @@ __pycache__/
 dist/
 build/
 .venv/
+
+# Rust (crates/) - Cargo.lock is committed since ruler-app is an application binary
+/target/

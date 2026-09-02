@@ -1,0 +1,14 @@
+[package]
+name = "ruler-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "screen-ruler application binary: Slint UI wired to ruler-core."
+
+[[bin]]
+name = "screen-ruler"
+path = "src/main.rs"
+
+[dependencies]
+ruler-core = { path = "../ruler-core" }
