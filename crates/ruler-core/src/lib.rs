@@ -6,7 +6,9 @@
 //!
 //! Modules are added incrementally as each piece lands.
 
+pub mod color;
 pub mod geometry;
+pub mod image;
 
 pub const CRATE_NAME: &str = "ruler-core";
 
