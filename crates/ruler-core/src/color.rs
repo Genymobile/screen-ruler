@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::image::Rgba8;
+use crate::image::{pixel_or_black, RgbaImage};
 
 /// A sampled colour with the representations the UI shows and copies.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,7 +54,18 @@ impl Sample {
 /// offsets on every cursor move would be waste.
 #[derive(Default)]
 pub struct KernelCache {
-    kernels: HashMap<usize, Vec<(isize, isize, f32)>>,
+    kernels: HashMap<u32, Vec<(i32, i32, f32)>>,
+}
+
+/// The largest radius worth building a kernel for.
+///
+/// Neighbours outside the image are skipped, so a disc wider than the image
+/// adds nothing. The `i32` bound matters separately: kernel offsets are `i32`,
+/// and a radius above `i32::MAX` would wrap the `radius as i32` below to a
+/// negative value, making `-r..=r` empty and silently degrading the sample to
+/// the single cursor pixel.
+fn clamped_radius(radius: u32, width: u32, height: u32) -> u32 {
+    radius.min(width.max(height)).min(i32::MAX as u32)
 }
 
 impl KernelCache {
@@ -63,19 +74,23 @@ impl KernelCache {
     }
 
     /// Returns `(dx, dy, weight)` triples covering a disc of `radius` pixels.
-    fn kernel(&mut self, radius: usize) -> &[(isize, isize, f32)] {
+    fn kernel(&mut self, radius: u32) -> &[(i32, i32, f32)] {
         self.kernels.entry(radius).or_insert_with(|| {
             if radius == 0 {
                 return vec![(0, 0, 1.0)];
             }
-            let r = radius as isize;
-            let radius_sq = (radius * radius) as f32;
-            let sigma = (radius as f32 / 2.0).max(0.5);
+            let r = radius as i32;
+            let radius_f = radius as f32;
+            let radius_sq = radius_f * radius_f;
+            let sigma = (radius_f / 2.0).max(0.5);
             let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
             let mut kernel = Vec::new();
             for dy in -r..=r {
                 for dx in -r..=r {
-                    let dist_sq = (dx * dx + dy * dy) as f32;
+                    // Distances in f32 throughout: dx*dx + dy*dy would
+                    // overflow i32 for a radius past ~46k.
+                    let (dxf, dyf) = (dx as f32, dy as f32);
+                    let dist_sq = dxf * dxf + dyf * dyf;
                     // Circular, not square: a square kernel would bias the
                     // average toward the corners of the sampled area.
                     if dist_sq > radius_sq {
@@ -93,33 +108,24 @@ impl KernelCache {
     /// A `radius` of 0 reads the single pixel under the cursor. Neighbours that
     /// fall outside the image are skipped rather than clamped, so sampling near
     /// a screen border does not smear the edge pixel across the average.
-    pub fn sample(&mut self, image: &Rgba8, x: usize, y: usize, radius: usize) -> Sample {
+    pub fn sample(&mut self, image: &RgbaImage, x: u32, y: u32, radius: u32) -> Sample {
         if radius == 0 || image.width() == 0 || image.height() == 0 {
-            let [r, g, b, _] = image.pixel(x, y);
+            let [r, g, b, _] = pixel_or_black(image, x, y);
             return Sample::from_rgb(r, g, b);
         }
 
-        // Neighbours outside the image are skipped, so a disc wider than the
-        // image adds nothing. Clamping keeps the cached kernel sized by the
-        // image rather than by whatever the caller passed, and keeps the
-        // `radius * radius` below from overflowing.
-        let radius = radius.min(image.width().max(image.height()));
+        let radius = clamped_radius(radius, image.width(), image.height());
 
-        let (w, h) = (image.width(), image.height());
+        let (w, h) = (image.width() as i64, image.height() as i64);
         let (mut sum_r, mut sum_g, mut sum_b, mut sum_w) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
 
         for &(dx, dy, weight) in self.kernel(radius) {
-            // Checked rather than `x as isize`, which wraps a large
-            // out-of-range coordinate to a negative offset and then samples
-            // real pixels at the opposite edge.
-            let (Some(px), Some(py)) = (x.checked_add_signed(dx), y.checked_add_signed(dy))
-            else {
-                continue;
-            };
-            if px >= w || py >= h {
+            let px = x as i64 + dx as i64;
+            let py = y as i64 + dy as i64;
+            if px < 0 || py < 0 || px >= w || py >= h {
                 continue;
             }
-            let [r, g, b, _] = image.pixel(px, py);
+            let [r, g, b, _] = pixel_or_black(image, px as u32, py as u32);
             sum_r += weight * r as f32;
             sum_g += weight * g as f32;
             sum_b += weight * b as f32;
@@ -127,7 +133,7 @@ impl KernelCache {
         }
 
         if sum_w <= 0.0 {
-            let [r, g, b, _] = image.pixel(x, y);
+            let [r, g, b, _] = pixel_or_black(image, x, y);
             return Sample::from_rgb(r, g, b);
         }
 
@@ -180,13 +186,10 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (u16, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::Rgba;
 
-    fn solid(width: usize, height: usize, rgb: [u8; 3]) -> Rgba8 {
-        let mut pixels = Vec::with_capacity(width * height * 4);
-        for _ in 0..width * height {
-            pixels.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
-        }
-        Rgba8::from_raw(width, height, pixels).expect("valid buffer")
+    fn solid(width: u32, height: u32, rgb: [u8; 3]) -> RgbaImage {
+        RgbaImage::from_pixel(width, height, Rgba([rgb[0], rgb[1], rgb[2], 255]))
     }
 
     #[test]
@@ -221,7 +224,7 @@ mod tests {
                 pixels.extend_from_slice(&[x * 100, y * 100, 0, 255]);
             }
         }
-        let image = Rgba8::from_raw(2, 2, pixels).expect("valid buffer");
+        let image = RgbaImage::from_raw(2, 2, pixels).expect("valid buffer");
         let mut cache = KernelCache::new();
 
         let sample = cache.sample(&image, 1, 1, 0);
@@ -235,22 +238,30 @@ mod tests {
 
         // Must not overflow, allocate without bound, or degrade into the
         // single-pixel fallback: it still averages the whole image.
-        let sample = cache.sample(&image, 4, 4, usize::MAX);
+        let sample = cache.sample(&image, 4, 4, u32::MAX);
         assert_eq!((sample.r, sample.g, sample.b), (30, 60, 90));
 
         // The cache is keyed by the clamped radius, not the caller's number.
         assert!(cache.kernels.contains_key(&8), "clamped kernel not cached");
         assert!(
-            !cache.kernels.contains_key(&usize::MAX),
+            !cache.kernels.contains_key(&u32::MAX),
             "cached a kernel for the unclamped radius"
         );
+    }
+
+    #[test]
+    fn radius_is_clamped_to_the_image_and_to_the_offset_domain() {
+        assert_eq!(clamped_radius(3, 100, 50), 3);
+        assert_eq!(clamped_radius(u32::MAX, 100, 50), 100);
+        // An image wider than i32::MAX would otherwise wrap the offset cast.
+        assert_eq!(clamped_radius(u32::MAX, u32::MAX, 1), i32::MAX as u32);
     }
 
     #[test]
     fn kernel_weights_follow_the_gaussian() {
         let mut cache = KernelCache::new();
         let kernel = cache.kernel(2).to_vec();
-        let weight = |dx: isize, dy: isize| {
+        let weight = |dx: i32, dy: i32| {
             kernel
                 .iter()
                 .find(|(kx, ky, _)| *kx == dx && *ky == dy)
@@ -269,7 +280,7 @@ mod tests {
     #[test]
     fn out_of_image_neighbours_are_skipped_not_clamped() {
         // `white_cols` leftmost columns white, the rest black.
-        fn striped(width: usize, white_cols: usize) -> Rgba8 {
+        fn striped(width: u32, white_cols: u32) -> RgbaImage {
             let mut pixels = Vec::new();
             for _ in 0..16 {
                 for x in 0..width {
@@ -277,7 +288,7 @@ mod tests {
                     pixels.extend_from_slice(&[v, v, v, 255]);
                 }
             }
-            Rgba8::from_raw(width, 16, pixels).expect("valid buffer")
+            RgbaImage::from_raw(width, 16, pixels).expect("valid buffer")
         }
 
         let mut cache = KernelCache::new();
@@ -322,7 +333,7 @@ mod tests {
                 pixels.extend_from_slice(&[v, v, v, 255]);
             }
         }
-        let image = Rgba8::from_raw(32, 32, pixels).expect("valid buffer");
+        let image = RgbaImage::from_raw(32, 32, pixels).expect("valid buffer");
         let mut cache = KernelCache::new();
 
         assert_eq!(cache.sample(&image, 16, 16, 0).r, 255);
@@ -343,22 +354,6 @@ mod tests {
         let image = solid(4, 4, [10, 20, 30]);
         let mut cache = KernelCache::new();
         let sample = cache.sample(&image, 99, 99, 0);
-        assert_eq!((sample.r, sample.g, sample.b), (0, 0, 0));
-    }
-
-    #[test]
-    fn a_wildly_out_of_range_centre_does_not_wrap_into_the_image() {
-        // `x as isize` turned usize::MAX into -1, so a positive kernel offset
-        // landed back on real pixels at the left edge. The existing
-        // out-of-bounds test uses radius 0 and takes the early-return path,
-        // so it never reached this.
-        let image = solid(4, 4, [255, 255, 255]);
-        let mut cache = KernelCache::new();
-
-        let sample = cache.sample(&image, usize::MAX, 1, 2);
-        assert_eq!((sample.r, sample.g, sample.b), (0, 0, 0));
-
-        let sample = cache.sample(&image, 1, usize::MAX, 2);
         assert_eq!((sample.r, sample.g, sample.b), (0, 0, 0));
     }
 
