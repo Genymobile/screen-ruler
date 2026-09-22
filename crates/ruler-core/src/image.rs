@@ -5,7 +5,7 @@
 //! bounds and overflow checks. Only the operations with app-specific
 //! behaviour live here.
 
-pub use ::image::{GrayImage, Rgba, RgbaImage};
+pub use ::image::{GrayImage, Luma, Rgba, RgbaImage};
 
 /// Returns the RGBA pixel at `(x, y)`, or opaque black when out of bounds.
 ///
