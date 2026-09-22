@@ -14,7 +14,9 @@ pub use ::image::{GrayImage, Rgba, RgbaImage};
 /// the caller decide, is an open question, so the behaviour is preserved here
 /// rather than changed in passing.
 pub fn pixel_or_black(image: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
-    image.get_pixel_checked(x, y).map_or([0, 0, 0, 255], |p| p.0)
+    image
+        .get_pixel_checked(x, y)
+        .map_or([0, 0, 0, 255], |p| p.0)
 }
 
 /// Rec. 601 luma, matching the weights OpenCV's `COLOR_RGB2GRAY` uses.
@@ -113,7 +115,11 @@ mod tests {
 
         assert_eq!(small.dimensions(), (3, 1));
         assert_eq!(small.get_pixel(0, 0).0, [0, 0, 0, 255]);
-        assert_eq!(small.get_pixel(2, 0).0, [255, 0, 0, 255], "edge column dropped");
+        assert_eq!(
+            small.get_pixel(2, 0).0,
+            [255, 0, 0, 255],
+            "edge column dropped"
+        );
     }
 
     #[test]

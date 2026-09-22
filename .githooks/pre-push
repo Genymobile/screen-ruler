@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# Pre-push checks for the Rust workspace.
+#
+# This project has no CI, so these are the only gate between a change and
+# main. They run on push rather than on commit because `but commit` does not
+# execute git hooks while `but push` does, and because clippy and the test
+# suite are too slow to want on every commit.
+#
+# Enable once per clone, whichever applies:
+#
+#   Plain git:
+#
+#     git config core.hooksPath .githooks
+#
+#   GitButler: it installs and removes its own hooks in the hooks directory,
+#   and its post-checkout deletes files from whichever directory it runs in --
+#   so pointing core.hooksPath at this tracked one would have it delete this
+#   file. Leave hooks in .git/hooks and delegate from there instead:
+#
+#     git config core.hooksPath .git/hooks
+#     printf '#!/bin/sh\nexec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"\n' \
+#       > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+#
+# Skip for one push:  but push --no-verify
+
+set -e
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-push: cargo not found, skipping Rust checks" >&2
+    exit 0
+fi
+
+echo "pre-push: cargo fmt --check"
+cargo fmt --check
+
+echo "pre-push: cargo clippy"
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "pre-push: cargo test"
+cargo test --workspace --quiet
+
+echo "pre-push: ok"
