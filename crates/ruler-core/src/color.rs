@@ -197,7 +197,11 @@ mod tests {
         let sample = Sample::from_rgb(230, 25, 94);
         assert_eq!(sample.hex(), "#E6195E");
         assert_eq!(sample.rgb(), "rgb(230, 25, 94)");
-        assert!(sample.hsl().starts_with("hsl(340, 80%, 50%)"), "{}", sample.hsl());
+        assert!(
+            sample.hsl().starts_with("hsl(340, 80%, 50%)"),
+            "{}",
+            sample.hsl()
+        );
     }
 
     #[test]

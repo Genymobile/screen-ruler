@@ -165,7 +165,10 @@ mod tests {
         assert!(m.contains_virtual(100, 100));
         assert!(m.contains_virtual(299, 299));
         assert!(!m.contains_virtual(300, 200), "right edge must not overlap");
-        assert!(!m.contains_virtual(200, 300), "bottom edge must not overlap");
+        assert!(
+            !m.contains_virtual(200, 300),
+            "bottom edge must not overlap"
+        );
         assert!(!m.contains_virtual(99, 100));
     }
 
@@ -182,7 +185,10 @@ mod tests {
     fn invalid_scale_factors_fall_back_to_one() {
         assert_eq!(monitor("x", (0, 0), (10, 10), 0.0).sanitised_scale(), 1.0);
         assert_eq!(monitor("x", (0, 0), (10, 10), -2.0).sanitised_scale(), 1.0);
-        assert_eq!(monitor("x", (0, 0), (10, 10), f32::NAN).sanitised_scale(), 1.0);
+        assert_eq!(
+            monitor("x", (0, 0), (10, 10), f32::NAN).sanitised_scale(),
+            1.0
+        );
         assert_eq!(monitor("x", (0, 0), (10, 10), 1.5).sanitised_scale(), 1.5);
     }
 
