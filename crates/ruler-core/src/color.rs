@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::image::{pixel_or_black, RgbaImage};
+use image::RgbaImage;
 
 /// A sampled colour with the representations the UI shows and copies.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -183,10 +183,22 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (u16, u8, u8) {
     )
 }
 
+/// The RGBA pixel at `(x, y)`, or opaque black when out of bounds.
+///
+/// The black sentinel is inherited from the reference branch's hand-rolled
+/// buffer. Whether out-of-range samples should instead clamp into the image
+/// as the Python does, or be rejected, is an open question, so the behaviour
+/// is preserved here rather than changed in passing.
+fn pixel_or_black(image: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
+    image
+        .get_pixel_checked(x, y)
+        .map_or([0, 0, 0, 255], |p| p.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::Rgba;
+    use image::Rgba;
 
     fn solid(width: u32, height: u32, rgb: [u8; 3]) -> RgbaImage {
         RgbaImage::from_pixel(width, height, Rgba([rgb[0], rgb[1], rgb[2], 255]))
@@ -370,5 +382,13 @@ mod tests {
         assert!(len > 40, "kernel is suspiciously small: {len}");
         assert_eq!(cache.kernel(4).len(), len, "cached kernel changed");
         assert_eq!(cache.kernel(0), &[(0, 0, 1.0)]);
+    }
+
+    #[test]
+    fn out_of_bounds_pixel_reads_are_opaque_black() {
+        let img = RgbaImage::from_pixel(2, 2, Rgba([10, 20, 30, 40]));
+        assert_eq!(pixel_or_black(&img, 0, 0), [10, 20, 30, 40]);
+        assert_eq!(pixel_or_black(&img, 2, 0), [0, 0, 0, 255]);
+        assert_eq!(pixel_or_black(&img, 0, 2), [0, 0, 0, 255]);
     }
 }

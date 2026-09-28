@@ -4,7 +4,25 @@
 //! (blur -> Sobel -> non-maximum suppression -> hysteresis), and dropping the
 //! dependency is what keeps this a single self-contained binary.
 
-use crate::image::GrayImage;
+use image::{GrayImage, RgbaImage};
+
+/// Rec. 601 luma, the input [`canny`] expects.
+///
+/// Matches the weights OpenCV's `COLOR_RGB2GRAY` uses. Deliberately not
+/// `image::imageops::grayscale`, which applies Rec. 709
+/// (0.2126/0.7152/0.0722): the Python implementation fed this straight into
+/// Canny with thresholds tuned against Rec. 601, so changing the basis would
+/// shift every gradient and silently detune edge detection.
+pub fn to_gray(image: &RgbaImage) -> GrayImage {
+    let mut out = GrayImage::new(image.width(), image.height());
+    for (dst, src) in out.pixels_mut().zip(image.pixels()) {
+        let [r, g, b, _] = src.0;
+        // Fixed-point 0.299 / 0.587 / 0.114 with rounding.
+        let luma = (r as u32 * 19595 + g as u32 * 38470 + b as u32 * 7471 + 32768) >> 16;
+        dst.0 = [luma as u8];
+    }
+    out
+}
 
 /// Sensitivity is a user-facing 0..100 dial; these anchor the Canny
 /// hysteresis thresholds it maps onto, carried over so existing muscle memory
@@ -344,7 +362,7 @@ fn hysteresis(thin: &[u16], w: usize, h: usize, low: u16, high: u16) -> EdgeMap 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::Luma;
+    use image::{Luma, Rgba};
 
     /// Builds a grayscale image from a closure over `(x, y)`.
     fn gray_from(width: u32, height: u32, f: impl Fn(u32, u32) -> u8) -> GrayImage {
@@ -522,5 +540,19 @@ mod tests {
         assert_eq!(map.count(), 2);
         assert!(map.at(1, 0) && map.at(2, 1));
         assert!(!map.at(0, 0));
+    }
+
+    #[test]
+    fn grayscale_uses_rec_601_not_the_crate_default() {
+        let luma = |rgb: [u8; 3]| {
+            let pixel = RgbaImage::from_pixel(1, 1, Rgba([rgb[0], rgb[1], rgb[2], 255]));
+            to_gray(&pixel).get_pixel(0, 0).0[0]
+        };
+        assert_eq!(luma([255, 255, 255]), 255);
+        assert_eq!(luma([0, 0, 0]), 0);
+        // Rec. 601: 0.299 / 0.587 / 0.114. Rec. 709 would give 54 / 182 / 18.
+        assert_eq!(luma([255, 0, 0]), 76);
+        assert_eq!(luma([0, 255, 0]), 150);
+        assert_eq!(luma([0, 0, 255]), 29);
     }
 }
