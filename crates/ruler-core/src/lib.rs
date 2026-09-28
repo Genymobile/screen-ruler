@@ -12,6 +12,7 @@ pub mod edges;
 pub mod geometry;
 pub mod image;
 pub mod measure;
+pub mod png;
 pub mod regions;
 
 pub const CRATE_NAME: &str = "ruler-core";
