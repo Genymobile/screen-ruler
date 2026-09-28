@@ -10,6 +10,7 @@ pub mod capture;
 pub mod clipboard;
 pub mod color;
 pub mod edges;
+pub mod export;
 pub mod geometry;
 pub mod image;
 pub mod measure;
