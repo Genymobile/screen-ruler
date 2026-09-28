@@ -7,6 +7,7 @@
 //! Modules are added incrementally as each piece lands.
 
 pub mod capture;
+pub mod clipboard;
 pub mod color;
 pub mod edges;
 pub mod geometry;
