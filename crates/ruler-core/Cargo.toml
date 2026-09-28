@@ -9,6 +9,23 @@ description = "Platform-agnostic capture, edge-detection, measurement, color, cl
 [dependencies]
 # Buffer types only. slint already links `image`, so this adds no weight;
 # default features stay off so we pull in no codecs of our own.
-image = { version = "0.25", default-features = false }
+# `png` decodes the desktop portal's screenshot; slint already enables it.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Linux capture is implemented natively rather than through xcap, whose Linux
+# backend links libwayland and PipeWire at build time. Every crate here is
+# already in the tree via slint, so this costs no extra dependencies:
+# wlr-screencopy + xdg-output (Wayland), the desktop portal over D-Bus (GNOME,
+# KDE) and RandR (X11).
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+x11rb = { version = "0.13", features = ["randr", "resource_manager"] }
+
+# Screen capture on macOS (Quartz) and Windows (DXGI).
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+xcap = "0.9"
 
 [dev-dependencies]
