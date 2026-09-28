@@ -12,6 +12,11 @@ description = "Platform-agnostic capture, edge-detection, measurement, color, cl
 # `png` decodes the desktop portal's screenshot; slint already enables it.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# Already linked by slint's winit backend. `image-data` adds nothing on Linux
+# (it needs `image` + `png`, both present); on macOS and Windows it pulls in
+# the TIFF and BMP codecs those clipboards exchange images in.
+arboard = { version = "3.6", default-features = false, features = ["image-data", "wayland-data-control"] }
+
 # Linux capture is implemented natively rather than through xcap, whose Linux
 # backend links libwayland and PipeWire at build time. Every crate here is
 # already in the tree via slint, so this costs no extra dependencies:
