@@ -14,15 +14,3 @@ pub mod geometry;
 pub mod measure;
 pub mod regions;
 pub mod state;
-
-pub const CRATE_NAME: &str = "ruler-core";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn crate_name_is_set() {
-        assert_eq!(CRATE_NAME, "ruler-core");
-    }
-}
