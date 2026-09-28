@@ -1,10 +1,9 @@
-//! ruler-core: platform-agnostic logic for screen-ruler.
+//! ruler-core: everything in screen-ruler that is not UI.
 //!
-//! The pure, testable half of the app, ported from the Python implementation
-//! in `ruler/`: screen capture, edge detection, geometry and measurement,
-//! colour sampling, clipboard, export, and the per-mode state machine.
-//!
-//! Modules are added incrementally as each piece lands.
+//! Screen capture, edge detection, geometry and measurement, colour sampling,
+//! the clipboard, and the interaction state machine. None of it depends on
+//! Slint or needs a display, so all of it is tested headlessly; `ruler-app`
+//! draws the state and carries out the commands it emits.
 
 pub mod capture;
 pub mod clipboard;

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Platform-agnostic capture, edge-detection, measurement, color, clipboard, export and state logic for screen-ruler."
+description = "The non-UI core of screen-ruler: capture, edge detection, measurement, color, clipboard and interaction state."
 
 [dependencies]
 # Buffer types only. slint already links `image`, so this adds no weight;
