@@ -178,6 +178,12 @@ macro_rules! modes {
 // Every snapping mode lists SnapDistance first — the dial the wheel drives, and
 // the one being adjusted most often while placing geometry — then Sensitivity,
 // because a snap radius is useless over an edge map too coarse to find the edge.
+//
+// Shrink-to-fit deliberately does not snap: the shrink itself finds the content
+// edges, so the drag only has to enclose the content roughly, and a corner
+// pulled onto an edge inside it would start the shrink from a rect that already
+// cuts into what it should keep. Its dial is the sensitivity, which is what
+// decides what the shrink finds.
 modes! {
     /// Cast rays outward from the cursor to the nearest edges.
     Crosshair   => controls [Sensitivity], rect false,
@@ -195,7 +201,7 @@ modes! {
                    hint "Detect the enclosing UI container";
 
     /// Drag a rectangle, then tighten it onto the content it encloses.
-    ShrinkToFit => controls [SnapDistance, Sensitivity], rect true,
+    ShrinkToFit => controls [Sensitivity], rect true,
                    label "Shrink-to-fit", export "Rectangle",
                    hint "Drag, then tighten onto the content inside";
 
@@ -973,11 +979,11 @@ mod tests {
     }
 
     #[test]
-    fn shrink_to_fit_snaps_like_the_dial_it_offers() {
-        // Regression: it showed a snap-distance slider, but snapping was never
-        // applied in that mode, so the control was inert.
-        assert!(Mode::ShrinkToFit.snaps());
-        assert_eq!(Mode::ShrinkToFit.primary_control(), Control::SnapDistance);
+    fn shrink_to_fit_leaves_the_edges_to_the_shrink() {
+        // The shrink finds the content edges itself; snapping the drag corners
+        // could only pull them inside the content first.
+        assert!(!Mode::ShrinkToFit.snaps());
+        assert_eq!(Mode::ShrinkToFit.primary_control(), Control::Sensitivity);
     }
 
     #[test]
@@ -1013,7 +1019,7 @@ mod tests {
             (Mode::Crosshair, 40.0),
             (Mode::RectDrag, 12.0),
             (Mode::Container, 40.0),
-            (Mode::ShrinkToFit, 12.0),
+            (Mode::ShrinkToFit, 40.0),
             (Mode::ColorPicker, 6.0),
             (Mode::Distance, 12.0),
         ] {
