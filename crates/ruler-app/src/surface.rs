@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use image::RgbaImage;
+use ruler_core::color::{KernelCache, Sample};
 use ruler_core::edges::EdgeMap;
 use ruler_core::geometry::{scale_from_widths, MonitorGeometry, Rect};
 use ruler_core::measure::{self, PixelRect};
@@ -138,6 +139,22 @@ impl Surface {
         self.logical_rect(shrunk.left, shrunk.top, shrunk.width(), shrunk.height())
     }
 
+    /// The colour under a logical point, averaged over `radius` logical px,
+    /// and the logical position of the pixel it was centred on (so the
+    /// marker sits on a real pixel, not between two).
+    pub fn sample(
+        &self,
+        kernels: &mut KernelCache,
+        x: f32,
+        y: f32,
+        radius: f32,
+    ) -> ((f32, f32), Sample) {
+        let (px, py) = self.logical_to_pixel(x, y);
+        let radius = (radius.max(0.0) * self.geometry.sanitised_scale()).round() as u32;
+        let sample = kernels.sample(&self.image, px, py, radius);
+        (self.geometry.image_to_logical(px as f32, py as f32), sample)
+    }
+
     /// An image-pixel rectangle as a logical one on this monitor.
     fn logical_rect(&self, x: u32, y: u32, width: u32, height: u32) -> Rect {
         let (lx, ly) = self.geometry.image_to_logical(x as f32, y as f32);
@@ -243,5 +260,19 @@ mod tests {
             height: 5.0,
         };
         assert_eq!(s.shrink(rect), rect);
+    }
+
+    #[test]
+    fn samples_land_on_a_whole_pixel() {
+        let mut s = surface(10, 10, 2.0);
+        s.image = Arc::new(RgbaImage::from_pixel(
+            10,
+            10,
+            image::Rgba([230, 25, 94, 255]),
+        ));
+        let ((x, y), sample) = s.sample(&mut KernelCache::new(), 2.3, 1.8, 0.0);
+        // 2.3 logical is image px 4 (4.6 truncated), back to 2.0 logical.
+        assert_eq!((x, y), (2.0, 1.5));
+        assert_eq!(sample.hex(), "#E6195E");
     }
 }

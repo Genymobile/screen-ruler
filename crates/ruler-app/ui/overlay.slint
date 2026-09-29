@@ -177,6 +177,199 @@ component Hint inherits Rectangle {
     }
 }
 
+// The sampled pixel, and the averaging disc when a radius is set.
+component ColorMarker {
+    in property <length> cx;
+    in property <length> cy;
+    in property <length> radius;
+
+    // The averaging disc: a translucent fill with a ring at its edge.
+    if root.radius > 0: Rectangle {
+        x: root.cx - root.radius;
+        y: root.cy - root.radius;
+        width: 2 * root.radius + 1px;
+        height: 2 * root.radius + 1px;
+        border-radius: root.radius + 0.5px;
+        background: Theme.accent.with-alpha(0.22);
+        border-width: 1px;
+        border-color: Theme.accent;
+    }
+
+    // With no radius, four gapped arms point at the pixel without hiding it.
+    if root.radius <= 0: Rectangle {
+        x: root.cx - 5px;
+        y: root.cy;
+        width: 3px;
+        height: 1px;
+        background: Theme.accent;
+    }
+    if root.radius <= 0: Rectangle {
+        x: root.cx + 3px;
+        y: root.cy;
+        width: 3px;
+        height: 1px;
+        background: Theme.accent;
+    }
+    if root.radius <= 0: Rectangle {
+        x: root.cx;
+        y: root.cy - 5px;
+        width: 1px;
+        height: 3px;
+        background: Theme.accent;
+    }
+    if root.radius <= 0: Rectangle {
+        x: root.cx;
+        y: root.cy + 3px;
+        width: 1px;
+        height: 3px;
+        background: Theme.accent;
+    }
+
+    // The sampled pixel itself.
+    Rectangle {
+        x: root.cx - 1px;
+        y: root.cy - 1px;
+        width: 3px;
+        height: 3px;
+        border-width: 1px;
+        border-color: Theme.accent;
+    }
+}
+
+// Swatch plus the colour in hex, rgb() and hsl(), beside the cursor.
+component ColorBubble inherits Rectangle {
+    in property <color> swatch;
+    in property <string> text;
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    in property <length> canvas-width;
+    in property <length> canvas-height;
+
+    property <length> margin: 2px;
+    property <length> offset-x: 22px;
+    property <length> offset-y: 10px;
+    property <length> flipped-x: root.anchor-x + root.offset-x + root.width + root.margin > root.canvas-width
+        ? max(root.margin, root.anchor-x - root.offset-x - root.width) : root.anchor-x + root.offset-x;
+    property <length> flipped-y: root.anchor-y + root.offset-y + root.height + root.margin > root.canvas-height
+        ? max(root.margin, root.anchor-y - root.offset-y - root.height) : root.anchor-y + root.offset-y;
+
+    x: max(root.margin, min(root.flipped-x, root.canvas-width - root.width - root.margin));
+    y: max(root.margin, min(root.flipped-y, root.canvas-height - root.height - root.margin));
+    width: row.preferred-width + 18px;
+    height: row.preferred-height + 12px;
+    background: Theme.panel;
+    border-radius: Theme.radius;
+    drop-shadow-offset-x: 2px;
+    drop-shadow-offset-y: 2px;
+    drop-shadow-color: Theme.shadow;
+
+    row := HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 10px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                background: root.swatch;
+                border-width: 1px;
+                border-color: Theme.text;
+            }
+        }
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-family: Theme.mono;
+            font-size: Theme.chip-font-size;
+        }
+    }
+}
+
+// A dashed axis-aligned segment from `from` to `to` along one axis, drawn as
+// short dashes since Slint paths have no dash pattern.
+component Dashes {
+    in property <bool> horizontal;
+    // Fixed coordinate across the segment, and its two ends along it.
+    in property <length> at;
+    in property <length> from;
+    in property <length> to;
+
+    property <length> dash: 4px;
+    property <length> gap: 4px;
+    property <length> start: min(root.from, root.to);
+    property <length> span: abs(root.to - root.from);
+
+    for i in floor(root.span / (root.dash + root.gap)) + 1: Rectangle {
+        x: root.horizontal ? root.start + i * (root.dash + root.gap) : root.at;
+        y: root.horizontal ? root.at : root.start + i * (root.dash + root.gap);
+        width: root.horizontal ? min(root.dash, root.span - i * (root.dash + root.gap)) : 1px;
+        height: root.horizontal ? 1px : min(root.dash, root.span - i * (root.dash + root.gap));
+        background: Theme.accent.with-alpha(0.7);
+    }
+}
+
+// Point A to point B: the line, its endpoints, and, when the line is
+// meaningfully diagonal, the dashed right-angle legs with their lengths.
+component Distance {
+    in property <length> ax;
+    in property <length> ay;
+    in property <length> bx;
+    in property <length> by;
+    in property <bool> show-legs;
+
+    if root.show-legs: Dashes {
+        width: 100%;
+        height: 100%;
+        horizontal: true;
+        at: root.ay;
+        from: root.ax;
+        to: root.bx;
+    }
+    if root.show-legs: Dashes {
+        width: 100%;
+        height: 100%;
+        horizontal: false;
+        at: root.bx;
+        from: root.ay;
+        to: root.by;
+    }
+
+    Path {
+        width: 100%;
+        height: 100%;
+        // Path coordinates in the element's own logical px.
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: Theme.accent;
+        stroke-width: 2px;
+
+        MoveTo {
+            x: root.ax / 1px;
+            y: root.ay / 1px;
+        }
+        LineTo {
+            x: root.bx / 1px;
+            y: root.by / 1px;
+        }
+    }
+
+    for point in [{ x: root.ax, y: root.ay }, { x: root.bx, y: root.by }]: Rectangle {
+        x: point.x - 2.5px;
+        y: point.y - 2.5px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: Theme.accent;
+    }
+}
+
 export component Overlay inherits Window {
     in property <image> backdrop;
     // The edge map, white on transparent, and how visible it is (0 = off).
@@ -202,9 +395,29 @@ export component Overlay inherits Window {
     in property <length> snap-x;
     in property <length> snap-y;
 
+    in property <bool> show-color;
+    in property <length> color-x;
+    in property <length> color-y;
+    in property <length> color-radius;
+    in property <color> color-swatch;
+    in property <string> color-text;
+
+    in property <bool> show-distance;
+    in property <length> distance-ax;
+    in property <length> distance-ay;
+    in property <length> distance-bx;
+    in property <length> distance-by;
+    in property <bool> distance-legs;
+    // Leg lengths, shown only with the legs.
+    in property <string> distance-dx;
+    in property <string> distance-dy;
+
+    // The main chip, anchored at (chip-x, chip-y) plus its offset.
     in property <string> chip-text;
     in property <length> chip-x;
     in property <length> chip-y;
+    in property <length> chip-offset-x: 14px;
+    in property <length> chip-offset-y: 4px;
     in property <string> hint-text;
 
     callback pointer-moved(length, length);
@@ -288,10 +501,60 @@ export component Overlay inherits Window {
                 snapped: root.snap-snapped;
             }
 
+            if root.show-color: ColorMarker {
+                width: 100%;
+                height: 100%;
+                cx: root.color-x;
+                cy: root.color-y;
+                radius: root.color-radius;
+            }
+
+            if root.show-distance: Distance {
+                width: 100%;
+                height: 100%;
+                ax: root.distance-ax;
+                ay: root.distance-ay;
+                bx: root.distance-bx;
+                by: root.distance-by;
+                show-legs: root.distance-legs;
+            }
+
+            // Leg chips: Δx under (or over) the horizontal leg, Δy beside the
+            // vertical one, both on the outside of the right angle.
+            if root.show-distance && root.distance-legs: Chip {
+                text: root.distance-dx;
+                anchor-x: (root.distance-ax + root.distance-bx) / 2;
+                anchor-y: root.distance-ay;
+                offset-x: 0;
+                offset-y: root.distance-by >= root.distance-ay ? 8px : -28px;
+                canvas-width: root.width;
+                canvas-height: root.height;
+            }
+            if root.show-distance && root.distance-legs: Chip {
+                text: root.distance-dy;
+                anchor-x: root.distance-bx;
+                anchor-y: (root.distance-ay + root.distance-by) / 2;
+                offset-x: root.distance-bx >= root.distance-ax ? 10px : -10px;
+                offset-y: root.distance-by >= root.distance-ay ? 0 : -20px;
+                canvas-width: root.width;
+                canvas-height: root.height;
+            }
+
             Chip {
                 text: root.chip-text;
                 anchor-x: root.chip-x;
                 anchor-y: root.chip-y;
+                offset-x: root.chip-offset-x;
+                offset-y: root.chip-offset-y;
+                canvas-width: root.width;
+                canvas-height: root.height;
+            }
+
+            if root.show-color: ColorBubble {
+                swatch: root.color-swatch;
+                text: root.color-text;
+                anchor-x: root.color-x;
+                anchor-y: root.color-y;
                 canvas-width: root.width;
                 canvas-height: root.height;
             }

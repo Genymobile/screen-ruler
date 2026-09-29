@@ -328,6 +328,13 @@ pub fn format_distance(value: f32) -> String {
 
 /// Formats the full A-to-B summary, adding a per-axis breakdown only when the
 /// line is meaningfully diagonal.
+/// Whether a distance is diagonal enough to be worth breaking down into
+/// Δx and Δy. Judged on the rounded deltas, the ones the breakdown prints, so
+/// the overlay's legs and the copied summary always agree.
+pub fn shows_delta_breakdown(dx: f32, dy: f32) -> bool {
+    dx.abs().round().min(dy.abs().round()) > DELTA_BREAKDOWN_THRESHOLD
+}
+
 pub fn format_distance_summary(ax: f32, ay: f32, bx: f32, by: f32) -> String {
     let dx = bx - ax;
     let dy = by - ay;
@@ -340,7 +347,7 @@ pub fn format_distance_summary(ax: f32, ay: f32, bx: f32, by: f32) -> String {
         by.round(),
         format_distance(distance)
     );
-    if dx.abs().round().min(dy.abs().round()) > DELTA_BREAKDOWN_THRESHOLD {
+    if shows_delta_breakdown(dx, dy) {
         summary.push_str(&format!(
             " (\u{0394}x={}, \u{0394}y={})",
             dx.abs().round(),
@@ -1071,6 +1078,15 @@ mod tests {
         assert_eq!(format_distance(10.0), "10 px");
         assert_eq!(format_distance(10.25), "10.3 px");
         assert_eq!(format_distance(10.04), "10 px");
+    }
+
+    #[test]
+    fn the_breakdown_is_judged_on_the_deltas_it_prints() {
+        // 8.1 prints as 8, which is not past the threshold.
+        assert!(!shows_delta_breakdown(8.1, 20.0));
+        assert!(!format_distance_summary(0.0, 0.0, 8.1, 20.0).contains('\u{0394}'));
+        assert!(shows_delta_breakdown(-8.6, 20.0));
+        assert!(format_distance_summary(0.0, 0.0, -8.6, 20.0).contains("\u{0394}x=9"));
     }
 
     #[test]

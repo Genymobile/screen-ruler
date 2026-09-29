@@ -13,9 +13,13 @@ use std::time::{Duration, Instant};
 
 use ruler_core::analysis::Analysis;
 use ruler_core::clipboard;
+use ruler_core::color::KernelCache;
 use ruler_core::edges;
 use ruler_core::geometry::{Point, Rect};
-use ruler_core::state::{format_size, Command, Destructive, DragState, Mode, RulerState};
+use ruler_core::state::{
+    format_distance, format_size, shows_delta_breakdown, Command, Destructive, DragState, Mode,
+    RulerState,
+};
 use slint::platform::Key;
 use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 
@@ -55,6 +59,8 @@ pub struct App {
     /// press turns out to be a confirming click.
     previous_drag: Option<DragState>,
     wheel: Wheel,
+    /// Sampling kernels, cached per radius.
+    kernels: KernelCache,
     /// Thresholds for the next analysis; `None` derives them from the
     /// sensitivity. Only the command line sets this, for the first run.
     thresholds: Option<(u16, u16)>,
@@ -86,6 +92,7 @@ impl App {
             press: None,
             previous_drag: None,
             wheel: Wheel::default(),
+            kernels: KernelCache::new(),
             thresholds,
             generation: 0,
             preview_since: None,
@@ -150,6 +157,22 @@ impl App {
         self.state.container = (self.state.mode == Mode::Container)
             .then(|| surface.container_at(pointer.x, pointer.y))
             .flatten();
+        self.state.sample = (self.state.mode == Mode::ColorPicker).then(|| {
+            let ((x, y), sample) = surface.sample(
+                &mut self.kernels,
+                pointer.x,
+                pointer.y,
+                self.state.color_radius,
+            );
+            (
+                Point {
+                    monitor: pointer.monitor,
+                    x,
+                    y,
+                },
+                sample,
+            )
+        });
     }
 
     /// Where something placed now would land: the snapped point when the
@@ -242,8 +265,14 @@ impl App {
                 let size = self.surfaces[monitor].rays_at(x, y).map(|r| r.size());
                 self.state.copy_and_quit(size);
             }
-            Mode::Container => self.state.copy_and_quit(None),
-            _ => {}
+            Mode::Container | Mode::ColorPicker => self.state.copy_and_quit(None),
+            Mode::Distance => match self.state.distance_anchor {
+                // The second point: measure to it and go.
+                Some(anchor) if anchor.monitor == monitor => self.state.copy_and_quit(None),
+                // The first point, or a new start on another monitor.
+                _ => self.state.distance_anchor = self.placement().filter(|p| p.monitor == monitor),
+            },
+            Mode::RectDrag | Mode::ShrinkToFit => {}
         }
     }
 
@@ -268,10 +297,12 @@ impl App {
             self.refresh_derived();
             true
         } else if is(Key::Escape) {
-            // Steps back one level at a time: a drag in progress, then a
-            // pending selection, before leaving.
+            // Steps back one level at a time: a drag in progress, a
+            // half-placed distance or a pending selection before leaving.
             if self.state.drag.active {
                 self.cancel_drag();
+            } else if self.state.distance_anchor.is_some() {
+                self.state.distance_anchor = None;
             } else if self.state.drag.has_selection {
                 self.state.drag.has_selection = false;
             } else {
@@ -435,7 +466,32 @@ impl App {
                     live.chip = Some((format_size(rect.width, rect.height), rect.x, rect.y));
                 }
             }
-            Mode::ColorPicker | Mode::Distance => {}
+            Mode::ColorPicker => {
+                if let Some((p, sample)) = self
+                    .state
+                    .sample
+                    .as_ref()
+                    .filter(|(p, _)| hovered && p.monitor == monitor)
+                {
+                    live.color = Some(ColorMark {
+                        x: p.x,
+                        y: p.y,
+                        radius: self.state.color_radius,
+                        rgb: [sample.r, sample.g, sample.b],
+                        text: sample.notations().join("\n"),
+                    });
+                }
+            }
+            Mode::Distance => {
+                let a = self.state.distance_anchor.filter(|a| a.monitor == monitor);
+                let b = self.placement().filter(|b| hovered && b.monitor == monitor);
+                if let (Some(a), Some(b)) = (a, b) {
+                    let mark = DistanceMark::between((a.x, a.y), (b.x, b.y));
+                    live.chip = Some((self.state.measurement_text(None), mark.mid.0, mark.mid.1));
+                    live.chip_offset = mark.chip_offset;
+                    live.distance = Some(mark);
+                }
+            }
         }
 
         // Always shown in the snapping modes, so the first point of a
@@ -509,6 +565,29 @@ impl App {
                 window.set_snap_y(y);
             }
 
+            window.set_show_color(live.color.is_some());
+            if let Some(color) = &live.color {
+                window.set_color_x(color.x);
+                window.set_color_y(color.y);
+                window.set_color_radius(color.radius);
+                let [r, g, b] = color.rgb;
+                window.set_color_swatch(slint::Color::from_rgb_u8(r, g, b));
+                window.set_color_text(color.text.as_str().into());
+            }
+
+            window.set_show_distance(live.distance.is_some());
+            if let Some(distance) = &live.distance {
+                window.set_distance_ax(distance.a.0);
+                window.set_distance_ay(distance.a.1);
+                window.set_distance_bx(distance.b.0);
+                window.set_distance_by(distance.b.1);
+                window.set_distance_legs(distance.legs);
+                window.set_distance_dx(format_distance(distance.delta.0.abs()).into());
+                window.set_distance_dy(format_distance(distance.delta.1.abs()).into());
+            }
+
+            window.set_chip_offset_x(live.chip_offset.0);
+            window.set_chip_offset_y(live.chip_offset.1);
             match live.chip {
                 Some((text, x, y)) => {
                     window.set_chip_text(text.into());
@@ -543,14 +622,109 @@ fn wire(window: &Overlay, monitor: usize) {
 }
 
 /// The live marks one window shows, in its logical px.
-#[derive(Default)]
 struct Live {
     crosshair: Option<(f32, f32, LogicalRays)>,
     rect: Option<Rect>,
     /// Whether the placement marker below is pulled onto an edge.
     snapped: bool,
     snap: Option<(f32, f32)>,
+    color: Option<ColorMark>,
+    distance: Option<DistanceMark>,
     /// Text and the point it is anchored to.
     chip: Option<(String, f32, f32)>,
+    /// Where the chip sits relative to its anchor.
+    chip_offset: (f32, f32),
     hint: Option<&'static str>,
+}
+
+impl Default for Live {
+    fn default() -> Self {
+        Self {
+            crosshair: None,
+            rect: None,
+            snapped: false,
+            snap: None,
+            color: None,
+            distance: None,
+            chip: None,
+            chip_offset: CHIP_OFFSET,
+            hint: None,
+        }
+    }
+}
+
+/// The chip's usual place: just below and right of its anchor.
+const CHIP_OFFSET: (f32, f32) = (14.0, 4.0);
+
+struct ColorMark {
+    x: f32,
+    y: f32,
+    radius: f32,
+    rgb: [u8; 3],
+    /// Hex, rgb() and hsl(), one per line.
+    text: String,
+}
+
+/// A distance being measured from A to B.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DistanceMark {
+    a: (f32, f32),
+    b: (f32, f32),
+    delta: (f32, f32),
+    mid: (f32, f32),
+    /// Whether the line is diagonal enough to show its dashed legs.
+    legs: bool,
+    /// Offsets the total chip off the line, along its normal, so it never
+    /// sits on top of what it measures.
+    chip_offset: (f32, f32),
+}
+
+impl DistanceMark {
+    const CHIP_CLEARANCE: f32 = 14.0;
+
+    fn between(a: (f32, f32), b: (f32, f32)) -> Self {
+        let delta = (b.0 - a.0, b.1 - a.1);
+        let length = (delta.0 * delta.0 + delta.1 * delta.1).sqrt();
+        let chip_offset = if length > 0.0 {
+            let normal = (-delta.1 / length, delta.0 / length);
+            (
+                normal.0 * Self::CHIP_CLEARANCE,
+                normal.1 * Self::CHIP_CLEARANCE,
+            )
+        } else {
+            CHIP_OFFSET
+        };
+        Self {
+            a,
+            b,
+            delta,
+            mid: ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0),
+            legs: shows_delta_breakdown(delta.0, delta.1),
+            chip_offset,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legs_show_only_for_a_meaningfully_diagonal_line() {
+        assert!(!DistanceMark::between((0.0, 0.0), (100.0, 4.0)).legs);
+        assert!(DistanceMark::between((0.0, 0.0), (100.0, 50.0)).legs);
+    }
+
+    #[test]
+    fn the_total_chip_sits_off_the_line() {
+        // A horizontal line: the chip is pushed straight down, off it.
+        let mark = DistanceMark::between((0.0, 0.0), (100.0, 0.0));
+        assert_eq!(mark.mid, (50.0, 0.0));
+        assert_eq!(mark.chip_offset, (0.0, 14.0));
+        // A zero-length line falls back to the usual offset.
+        assert_eq!(
+            DistanceMark::between((5.0, 5.0), (5.0, 5.0)).chip_offset,
+            CHIP_OFFSET
+        );
+    }
 }
