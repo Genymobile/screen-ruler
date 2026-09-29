@@ -186,6 +186,36 @@ pub fn canny(gray: &GrayImage, low: u16, high: u16) -> EdgeMap {
         return EdgeMap::blank(gray.width(), gray.height());
     }
 
+    let blurred = gaussian_blur_5(gray.as_raw(), w, h);
+    finish(&[blurred], w, h, low, high)
+}
+
+/// Runs Canny edge detection over the colour image itself, not its luma.
+///
+/// Each channel is blurred and differentiated separately, and every pixel
+/// keeps the gradient of whichever channel changes most there. Grayscale
+/// throws hue away: two areas of equal brightness but different colour (a
+/// dark grey dock beside an aubergine terminal: luma 19 vs 24, red 19 vs
+/// 48) have no luma edge at the default sensitivity, and only a faint one at
+/// the very top of the dial, yet are an obvious boundary on screen. On neutral greys all three channels agree, so the result there
+/// is the same as [`canny`] on the luma, and the thresholds keep their
+/// calibration.
+pub fn canny_color(image: &RgbaImage, low: u16, high: u16) -> EdgeMap {
+    let (w, h) = (image.width() as usize, image.height() as usize);
+    if w < 3 || h < 3 {
+        return EdgeMap::blank(image.width(), image.height());
+    }
+
+    let raw = image.as_raw();
+    let channels = [0, 1, 2].map(|c| {
+        let plane: Vec<u8> = raw.iter().skip(c).step_by(4).copied().collect();
+        gaussian_blur_5(&plane, w, h)
+    });
+    finish(&channels, w, h, low, high)
+}
+
+/// Gradient, thinning and hysteresis over already-blurred channels.
+fn finish(channels: &[Vec<u16>], w: usize, h: usize, low: u16, high: u16) -> EdgeMap {
     // Hysteresis needs a strictly higher upper threshold. Cap the lower one
     // first so `low == u16::MAX` cannot overflow the increment.
     let (low, high) = if high <= low {
@@ -194,8 +224,7 @@ pub fn canny(gray: &GrayImage, low: u16, high: u16) -> EdgeMap {
     } else {
         (low, high)
     };
-    let blurred = gaussian_blur_5(gray);
-    let (magnitude, direction) = sobel(&blurred, w, h);
+    let (magnitude, direction) = sobel(channels, w, h);
     let thin = non_maximum_suppression(&magnitude, &direction, w, h);
     hysteresis(&thin, w, h, low, high)
 }
@@ -204,10 +233,8 @@ pub fn canny(gray: &GrayImage, low: u16, high: u16) -> EdgeMap {
 ///
 /// Suppresses font anti-aliasing and wallpaper noise that would otherwise
 /// produce a haze of spurious edges. Borders clamp rather than wrap.
-fn gaussian_blur_5(gray: &GrayImage) -> Vec<u16> {
+fn gaussian_blur_5(src: &[u8], w: usize, h: usize) -> Vec<u16> {
     const K: [u32; 5] = [1, 4, 6, 4, 1];
-    let (w, h) = (gray.width() as usize, gray.height() as usize);
-    let src = gray.as_raw();
 
     let mut horizontal = vec![0u16; w * h];
     for y in 0..h {
@@ -249,28 +276,38 @@ enum Dir {
 }
 
 /// 3x3 Sobel returning L2 gradient magnitude and a quantised direction.
-fn sobel(src: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<Dir>) {
+///
+/// With several channels, each pixel takes the gradient of the channel with
+/// the largest magnitude there, direction included, so a colour boundary is
+/// located by the channel that actually changes across it.
+fn sobel(channels: &[Vec<u16>], w: usize, h: usize) -> (Vec<u16>, Vec<Dir>) {
     let mut magnitude = vec![0u16; w * h];
     let mut direction = vec![Dir::EastWest; w * h];
 
     for y in 1..h - 1 {
         for x in 1..w - 1 {
             let idx = y * w + x;
-            let tl = src[idx - w - 1] as i32;
-            let tc = src[idx - w] as i32;
-            let tr = src[idx - w + 1] as i32;
-            let ml = src[idx - 1] as i32;
-            let mr = src[idx + 1] as i32;
-            let bl = src[idx + w - 1] as i32;
-            let bc = src[idx + w] as i32;
-            let br = src[idx + w + 1] as i32;
+            let (mut best, mut best_gx, mut best_gy) = (0i64, 0i32, 0i32);
+            for src in channels {
+                let tl = src[idx - w - 1] as i32;
+                let tc = src[idx - w] as i32;
+                let tr = src[idx - w + 1] as i32;
+                let ml = src[idx - 1] as i32;
+                let mr = src[idx + 1] as i32;
+                let bl = src[idx + w - 1] as i32;
+                let bc = src[idx + w] as i32;
+                let br = src[idx + w + 1] as i32;
 
-            let gx = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
-            let gy = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+                let gx = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
+                let gy = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+                let squared = i64::from(gx) * i64::from(gx) + i64::from(gy) * i64::from(gy);
+                if squared > best {
+                    (best, best_gx, best_gy) = (squared, gx, gy);
+                }
+            }
 
-            let mag = ((gx * gx + gy * gy) as f32).sqrt();
-            magnitude[idx] = mag.min(u16::MAX as f32) as u16;
-            direction[idx] = quantise_direction(gx, gy);
+            magnitude[idx] = (best as f32).sqrt().min(u16::MAX as f32) as u16;
+            direction[idx] = quantise_direction(best_gx, best_gy);
         }
     }
 
@@ -554,5 +591,51 @@ mod tests {
         assert_eq!(luma([255, 0, 0]), 76);
         assert_eq!(luma([0, 255, 0]), 150);
         assert_eq!(luma([0, 0, 255]), 29);
+    }
+
+    /// Two flat halves meeting at x = 16.
+    fn halves(left: [u8; 3], right: [u8; 3]) -> RgbaImage {
+        RgbaImage::from_fn(32, 32, |x, _| {
+            let [r, g, b] = if x < 16 { left } else { right };
+            Rgba([r, g, b, 255])
+        })
+    }
+
+    #[test]
+    fn a_hue_boundary_of_equal_brightness_is_found_in_colour_only() {
+        // The GNOME dock beside an aubergine terminal: luma 19 vs 24.
+        let image = halves([19, 19, 19], [48, 10, 36]);
+        let (low, high) = sensitivity_to_thresholds(DEFAULT_SENSITIVITY);
+
+        assert_eq!(
+            canny(&to_gray(&image), low, high).count(),
+            0,
+            "luma cannot see it"
+        );
+        let edges = canny_color(&image, low, high);
+        assert!(
+            (4..28).all(|y| edges.any_in_row(y, 14, 18)),
+            "every row finds the boundary"
+        );
+    }
+
+    #[test]
+    fn on_greys_colour_and_luma_agree() {
+        // Neutral pixels have equal channels, so the calibration is unchanged.
+        let image = RgbaImage::from_fn(40, 40, |x, y| {
+            let v = if (x / 10 + y / 10) % 2 == 0 { 40 } else { 200 };
+            Rgba([v, v, v, 255])
+        });
+        let (low, high) = sensitivity_to_thresholds(DEFAULT_SENSITIVITY);
+        assert_eq!(
+            canny_color(&image, low, high).as_slice(),
+            canny(&to_gray(&image), low, high).as_slice()
+        );
+    }
+
+    #[test]
+    fn colour_canny_handles_degenerate_images() {
+        assert_eq!(canny_color(&RgbaImage::new(2, 50), 10, 30).count(), 0);
+        assert_eq!(canny_color(&RgbaImage::new(0, 0), 10, 30).count(), 0);
     }
 }

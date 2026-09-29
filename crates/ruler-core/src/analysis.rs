@@ -21,7 +21,9 @@ pub struct Analysis {
 impl Analysis {
     /// Analyses one screenshot with the given Canny thresholds.
     pub fn of(image: &RgbaImage, (low, high): (u16, u16)) -> Self {
-        let edges = edges::canny(&edges::to_gray(image), low, high);
+        // Colour, not luma: a boundary between two areas of equal
+        // brightness but different hue is still a boundary on screen.
+        let edges = edges::canny_color(image, low, high);
         let regions = RegionMap::build(&edges);
         Self { edges, regions }
     }
