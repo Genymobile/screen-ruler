@@ -1,61 +1,29 @@
 //! screen-ruler application entry point.
 //!
 //! Captures every monitor, then covers each one with a borderless fullscreen
-//! overlay window showing its frozen screenshot. Measurement, the controls
-//! panel and the rest of the UI are drawn on top of these in later steps.
+//! overlay window showing its frozen screenshot, and hands them to [`app`],
+//! which draws the measurement on top.
 
 slint::slint! {
-    export component Overlay inherits Window {
-        in property <image> backdrop;
-        in property <string> label;
-        callback quit();
-
-        no-frame: true;
-        forward-focus: keys;
-
-        keys := FocusScope {
-            key-pressed(event) => {
-                if (event.text == Key.Escape) {
-                    root.quit();
-                    return accept;
-                }
-                reject
-            }
-
-            Image {
-                source: root.backdrop;
-                width: 100%;
-                height: 100%;
-                image-fit: fill;
-            }
-
-            Rectangle {
-                x: 16px;
-                y: 16px;
-                width: caption.preferred-width + 16px;
-                height: caption.preferred-height + 8px;
-                background: #000000b0;
-                border-radius: 6px;
-
-                caption := Text {
-                    text: root.label;
-                    color: white;
-                }
-            }
-        }
-    }
+    export { Overlay, Rays } from "ui/overlay.slint";
 }
 
+mod analysis;
+mod app;
 mod cli;
+mod input;
 mod placement;
+mod surface;
 
 use std::process::ExitCode;
 
 use cli::{Options, Parsed};
 use ruler_core::capture::{self, CapturedMonitor};
+use ruler_core::state::RulerState;
 use slint::winit_030::winit::window::Fullscreen;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
+use surface::Surface;
 
 fn main() -> ExitCode {
     let options = match cli::parse(std::env::args().skip(1)) {
@@ -94,20 +62,28 @@ fn run(options: &Options) -> Result<(), String> {
     let monitors =
         capture::capture_all().map_err(|e| format!("{e}\n{}", capture::permission_hint()))?;
 
-    let overlays = monitors
+    let windows = monitors
         .iter()
-        .map(|monitor| open_overlay(monitor, options))
+        .enumerate()
+        .map(|(index, monitor)| open_overlay(monitor, index == 0))
         .collect::<Result<Vec<_>, _>>()?;
+    let surfaces = monitors
+        .into_iter()
+        .map(|m| Surface::new(m.geometry, m.image))
+        .collect();
+
+    let state = RulerState::new(options.sensitivity, options.debug_edges);
+    let app = app::App::start(state, surfaces, windows, options.thresholds);
 
     slint::run_event_loop().map_err(|e| e.to_string())?;
-    drop(overlays);
+    drop(app);
     Ok(())
 }
 
 /// Opens one overlay and pins it, borderless fullscreen, to the output
-/// `monitor` was captured from.
-fn open_overlay(monitor: &CapturedMonitor, options: &Options) -> Result<Overlay, String> {
-    let geometry = &monitor.geometry;
+/// `monitor` was captured from. `focus` asks for keyboard focus too: an
+/// overlay that never receives keys could not be quit.
+fn open_overlay(monitor: &CapturedMonitor, focus: bool) -> Result<Overlay, String> {
     let overlay = Overlay::new().map_err(|e| e.to_string())?;
 
     let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
@@ -116,28 +92,23 @@ fn open_overlay(monitor: &CapturedMonitor, options: &Options) -> Result<Overlay,
         monitor.image.height(),
     );
     overlay.set_backdrop(Image::from_rgba8(pixels));
-    overlay.set_label(
-        format!(
-            "{} · {}×{} @{}x · sensitivity {} · Esc to quit",
-            geometry.name, geometry.size.0, geometry.size.1, geometry.scale, options.sensitivity
-        )
-        .into(),
-    );
-    overlay.on_quit(|| {
-        let _ = slint::quit_event_loop();
-    });
     overlay.show().map_err(|e| e.to_string())?;
 
     // The winit window only exists once the event loop is running, so the
     // placement waits for it rather than racing it.
     let window = overlay.as_weak();
-    let geometry = geometry.clone();
+    let geometry = monitor.geometry.clone();
     slint::spawn_local(async move {
         let Some(overlay) = window.upgrade() else {
             return;
         };
         match overlay.window().winit_window().await {
-            Ok(winit_window) => place(&winit_window, &geometry),
+            Ok(winit_window) => {
+                place(&winit_window, &geometry);
+                if focus {
+                    winit_window.focus_window();
+                }
+            }
             Err(e) => eprintln!("screen-ruler: {}: no native window: {e}", geometry.name),
         }
     })

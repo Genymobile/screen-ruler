@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 ruler-core = { path = "../ruler-core" }
+# Buffer types only, as in ruler-core; already linked by slint.
+image = { version = "0.25", default-features = false }
 # `unstable-winit-030` exposes the winit window, needed to pin each overlay
 # fullscreen on a specific output. The winit backend is already built, so it
 # adds no crates, but Slint may change that API in a minor release.

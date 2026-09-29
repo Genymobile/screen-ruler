@@ -15,3 +15,9 @@ repository = "https://github.com/Genymobile/screen-ruler"
 opt-level = 3
 lto = true
 strip = true
+
+# Edge detection and region labelling take close to a second per 1080p
+# monitor unoptimised (about 40 ms optimised), which makes every sensitivity
+# change drag in a debug build. Optimise the core even there.
+[profile.dev.package.ruler-core]
+opt-level = 3

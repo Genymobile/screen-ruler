@@ -3972,6 +3972,7 @@ dependencies = [
 name = "ruler-app"
 version = "0.1.0"
 dependencies = [
+ "image",
  "ruler-core",
  "slint",
 ]
