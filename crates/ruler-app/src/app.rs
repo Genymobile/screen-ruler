@@ -11,16 +11,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use ruler_core::analysis::Analysis;
 use ruler_core::clipboard;
 use ruler_core::edges;
-use ruler_core::geometry::Point;
-use ruler_core::state::{Command, Destructive, Mode, RulerState};
+use ruler_core::geometry::{Point, Rect};
+use ruler_core::state::{format_size, Command, Destructive, DragState, Mode, RulerState};
 use slint::platform::Key;
 use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 
 use crate::analysis;
 use crate::input::{self, Wheel};
-use crate::surface::Surface;
+use crate::surface::{LogicalRays, Surface};
 use crate::{Overlay, Rays};
 
 /// Redraw interval while something animates (the edge preview fade).
@@ -50,6 +51,9 @@ pub struct App {
     hovered: Option<usize>,
     /// Where the left button went down, for telling clicks from drags.
     press: Option<(usize, f32, f32)>,
+    /// The selection as it was before the current press, restored if the
+    /// press turns out to be a confirming click.
+    previous_drag: Option<DragState>,
     wheel: Wheel,
     /// Thresholds for the next analysis; `None` derives them from the
     /// sensitivity. Only the command line sets this, for the first run.
@@ -80,6 +84,7 @@ impl App {
             windows,
             hovered: None,
             press: None,
+            previous_drag: None,
             wheel: Wheel::default(),
             thresholds,
             generation: 0,
@@ -107,10 +112,50 @@ impl App {
         if let Some(width) = self.window_logical_width(monitor) {
             self.surfaces[monitor].reconcile_scale(width);
         }
+        // A drag belongs to the monitor it started on: another window's
+        // coordinates are in a different space, so they cannot extend it.
+        if self.state.drag.active && self.state.drag.monitor != monitor {
+            return;
+        }
         self.hovered = Some(monitor);
         self.state.pointer = Some(Point { monitor, x, y });
         self.state.active_monitor = monitor;
+        self.refresh_derived();
+        if self.state.drag.active {
+            if let Some(point) = self.placement() {
+                self.state.drag.end = (point.x, point.y);
+            }
+        }
         self.render();
+    }
+
+    /// Recomputes what the current mode derives from the pointer: the
+    /// snapped point and the container under it.
+    fn refresh_derived(&mut self) {
+        let Some(pointer) = self.state.pointer else {
+            return;
+        };
+        let surface = &self.surfaces[pointer.monitor];
+        self.state.snapped = self
+            .state
+            .mode
+            .snaps()
+            .then(|| surface.snap(pointer.x, pointer.y, self.state.snap_distance))
+            .flatten()
+            .map(|(x, y)| Point {
+                monitor: pointer.monitor,
+                x,
+                y,
+            });
+        self.state.container = (self.state.mode == Mode::Container)
+            .then(|| surface.container_at(pointer.x, pointer.y))
+            .flatten();
+    }
+
+    /// Where something placed now would land: the snapped point when the
+    /// cursor is near an edge, otherwise the pointer itself.
+    fn placement(&self) -> Option<Point> {
+        self.state.snapped.or(self.state.pointer)
     }
 
     fn pointer_left(&mut self, monitor: usize) {
@@ -122,6 +167,24 @@ impl App {
 
     fn pointer_pressed(&mut self, monitor: usize, x: f32, y: f32) {
         self.press = Some((monitor, x, y));
+        if self.state.mode.is_rect_selection() {
+            // Kept aside: if this press turns out to be a click, it confirms
+            // the selection a previous drag left rather than starting anew.
+            self.previous_drag = Some(self.state.drag);
+            let start = self
+                .placement()
+                .filter(|p| p.monitor == monitor)
+                .map_or((x, y), |p| (p.x, p.y));
+            self.state.drag = DragState {
+                active: true,
+                has_selection: false,
+                monitor,
+                start,
+                end: start,
+                press: (x, y),
+            };
+            self.render();
+        }
     }
 
     fn pointer_released(&mut self, monitor: usize, x: f32, y: f32) {
@@ -130,23 +193,66 @@ impl App {
         };
         // Acting on release, not press: a click is only a click once the
         // button comes back up without the pointer having travelled.
-        if pressed_on == monitor && input::is_click((px, py), (x, y)) {
+        let click = pressed_on == monitor && input::is_click((px, py), (x, y));
+        if self.state.mode.is_rect_selection() {
+            self.finish_drag(click);
+        } else if click {
             self.click(monitor, x, y);
+        }
+        self.process_commands();
+        self.render();
+    }
+
+    fn finish_drag(&mut self, click: bool) {
+        let previous = self.previous_drag.take().unwrap_or_default();
+        if click {
+            self.state.drag = previous;
+            self.confirm_selection();
+            return;
+        }
+        self.state.drag.active = false;
+        self.state.drag.has_selection = true;
+        if self.state.mode == Mode::ShrinkToFit {
+            if let Some(rect) = self.state.drag.rect() {
+                let shrunk = self.surfaces[rect.monitor].shrink(rect);
+                self.state.drag.start = (shrunk.x, shrunk.y);
+                self.state.drag.end = (shrunk.x + shrunk.width, shrunk.y + shrunk.height);
+            }
+        }
+    }
+
+    /// Drops a drag in progress. The button is still down, so the press is
+    /// forgotten too: its release must neither confirm nor finish anything.
+    fn cancel_drag(&mut self) {
+        self.press = None;
+        self.previous_drag = None;
+        self.state.drag = DragState::default();
+    }
+
+    /// Copies a finished rectangle selection and quits.
+    fn confirm_selection(&mut self) {
+        if self.state.drag.has_selection {
+            self.state.copy_and_quit(None);
         }
     }
 
     fn click(&mut self, monitor: usize, x: f32, y: f32) {
-        if self.state.mode == Mode::Crosshair {
-            let size = self.surfaces[monitor].rays_at(x, y).map(|r| r.size());
-            self.state.copy_and_quit(size);
+        match self.state.mode {
+            Mode::Crosshair => {
+                let size = self.surfaces[monitor].rays_at(x, y).map(|r| r.size());
+                self.state.copy_and_quit(size);
+            }
+            Mode::Container => self.state.copy_and_quit(None),
+            _ => {}
         }
-        self.process_commands();
     }
 
     fn wheel(&mut self, delta: f32) {
         let notches = self.wheel.feed(delta);
         if notches != 0 {
             self.state.adjust_by_wheel(notches as f32);
+            // A new snap radius moves the snapped point right away.
+            self.refresh_derived();
             self.process_commands();
             self.render();
         }
@@ -154,8 +260,28 @@ impl App {
 
     /// Returns whether the key was handled.
     fn key(&mut self, text: &str, ctrl: bool, _shift: bool) -> bool {
-        let handled = if text == SharedString::from(Key::Escape).as_str() {
-            self.state.request_destructive(Destructive::Escape);
+        let is = |key: Key| text == SharedString::from(key).as_str();
+        let digit = text.parse::<usize>().ok().filter(|_| text.len() == 1);
+
+        let handled = if let Some(mode) = digit.and_then(Mode::from_digit).filter(|_| !ctrl) {
+            self.state.set_mode(mode);
+            self.refresh_derived();
+            true
+        } else if is(Key::Escape) {
+            // Steps back one level at a time: a drag in progress, then a
+            // pending selection, before leaving.
+            if self.state.drag.active {
+                self.cancel_drag();
+            } else if self.state.drag.has_selection {
+                self.state.drag.has_selection = false;
+            } else {
+                self.state.request_destructive(Destructive::Escape);
+            }
+            true
+        } else if is(Key::Return) {
+            if self.state.mode.is_rect_selection() {
+                self.confirm_selection();
+            }
             true
         } else if !ctrl && text.eq_ignore_ascii_case("q") {
             self.state.request_destructive(Destructive::Quit);
@@ -168,6 +294,7 @@ impl App {
             false
         };
         self.process_commands();
+        self.render();
         handled
     }
 
@@ -217,20 +344,23 @@ impl App {
         });
     }
 
-    fn analysed(&mut self, generation: u64, maps: Vec<edges::EdgeMap>) {
+    fn analysed(&mut self, generation: u64, results: Vec<Analysis>) {
         if generation != self.generation {
             return;
         }
         let first = self.surfaces.iter().all(|s| s.edges.is_none());
-        for ((surface, image), map) in self
+        for ((surface, image), result) in self
             .surfaces
             .iter_mut()
             .zip(&mut self.edge_images)
-            .zip(maps)
+            .zip(results)
         {
-            surface.edges = Some(map);
+            surface.edges = Some(result.edges);
+            surface.regions = Some(result.regions);
             *image = None;
         }
+        // Snapping and the container were derived from the old maps.
+        self.refresh_derived();
         // Flash the new map, unless this is the start-up analysis nobody
         // asked to see.
         if !first {
@@ -254,7 +384,7 @@ impl App {
     // ------------------------------------------------------------ render
 
     /// The crosshair under the pointer, when it has something to show.
-    fn live_crosshair(&self) -> Option<(Point, crate::surface::LogicalRays)> {
+    fn live_crosshair(&self) -> Option<(Point, LogicalRays)> {
         let point = self.state.pointer?;
         if self.state.mode != Mode::Crosshair || self.hovered != Some(point.monitor) {
             return None;
@@ -263,15 +393,81 @@ impl App {
         Some((point, rays))
     }
 
+    /// What `monitor`'s window should show right now.
+    fn live(&self, monitor: usize) -> Live {
+        let mut live = Live::default();
+        let hovered = self.hovered == Some(monitor);
+        let pointer = self.state.pointer.filter(|p| p.monitor == monitor);
+
+        let analysing = hovered && self.surfaces[monitor].edges.is_none();
+        if analysing && self.state.mode.needs_edges() {
+            if let Some(p) = pointer {
+                live.chip = Some(("Detecting edges…".to_string(), p.x, p.y));
+            }
+            return live;
+        }
+
+        match self.state.mode {
+            Mode::Crosshair => {
+                if let Some((p, rays)) = self.live_crosshair().filter(|(p, _)| p.monitor == monitor)
+                {
+                    live.crosshair = Some((p.x, p.y, rays));
+                    live.chip = Some((self.state.measurement_text(Some(rays.size())), p.x, p.y));
+                }
+            }
+            Mode::RectDrag | Mode::ShrinkToFit => {
+                let drag = &self.state.drag;
+                if let Some(rect) = drag.rect().filter(|r| r.monitor == monitor) {
+                    live.rect = Some(rect);
+                    live.chip = Some((format_size(rect.width, rect.height), rect.x, rect.y));
+                    if drag.has_selection && !drag.active {
+                        live.hint = Some("Click or press Enter to copy · Esc to cancel");
+                    }
+                }
+            }
+            Mode::Container => {
+                if let Some(rect) = self
+                    .state
+                    .container
+                    .filter(|r| hovered && r.monitor == monitor)
+                {
+                    live.rect = Some(rect);
+                    live.chip = Some((format_size(rect.width, rect.height), rect.x, rect.y));
+                }
+            }
+            Mode::ColorPicker | Mode::Distance => {}
+        }
+
+        // Always shown in the snapping modes, so the first point of a
+        // two-point measurement can be aimed before anything snaps.
+        if hovered && self.state.mode.snaps() {
+            live.snapped = self.state.snapped.is_some();
+            live.snap = self
+                .placement()
+                .filter(|p| p.monitor == monitor)
+                .map(|p| (p.x, p.y));
+        }
+        // Until the first analysis lands nothing snaps; say so, unless a
+        // measurement in progress already has the chip.
+        if analysing && self.state.mode.snaps() && live.chip.is_none() {
+            if let Some(p) = pointer {
+                live.chip = Some(("Detecting edges…".to_string(), p.x, p.y));
+            }
+        }
+        live
+    }
+
     fn render(&mut self) {
         let opacity = input::edges_opacity(
             self.state.debug_edges,
             self.preview_since.map(|t| t.elapsed()),
         );
-        let crosshair = self.live_crosshair();
-        let pointer = self.state.pointer;
+        let dragging = self.state.drag.active;
 
-        for (monitor, window) in self.windows.iter().enumerate() {
+        for monitor in 0..self.windows.len() {
+            let live = self.live(monitor);
+            let window = &self.windows[monitor];
+
             window.set_edges_opacity(opacity);
             if opacity > 0.0 {
                 if let (None, Some(map)) =
@@ -283,35 +479,45 @@ impl App {
                 }
             }
 
-            match (crosshair, pointer) {
-                (Some((point, rays)), _) if point.monitor == monitor => {
-                    window.set_cursor_x(point.x);
-                    window.set_cursor_y(point.y);
-                    window.set_rays(Rays {
-                        north: rays.north,
-                        south: rays.south,
-                        west: rays.west,
-                        east: rays.east,
-                    });
-                    window.set_show_crosshair(true);
-                    window.set_chip_text(self.state.measurement_text(Some(rays.size())).into());
-                }
-                // Hovered, but the edge map is still being computed.
-                (None, Some(point))
-                    if point.monitor == monitor
-                        && self.hovered == Some(monitor)
-                        && self.surfaces[monitor].edges.is_none() =>
-                {
-                    window.set_cursor_x(point.x);
-                    window.set_cursor_y(point.y);
-                    window.set_show_crosshair(false);
-                    window.set_chip_text("Detecting edges…".into());
-                }
-                _ => {
-                    window.set_show_crosshair(false);
-                    window.set_chip_text(SharedString::new());
-                }
+            window.set_show_crosshair(live.crosshair.is_some());
+            if let Some((x, y, rays)) = live.crosshair {
+                window.set_cursor_x(x);
+                window.set_cursor_y(y);
+                window.set_rays(Rays {
+                    north: rays.north,
+                    south: rays.south,
+                    west: rays.west,
+                    east: rays.east,
+                });
             }
+
+            window.set_show_rect(live.rect.is_some());
+            // Eased when the rect jumps (a new container, a shrink), exact
+            // while it follows a drag.
+            window.set_rect_animated(!dragging);
+            if let Some(rect) = live.rect {
+                window.set_rect_x(rect.x);
+                window.set_rect_y(rect.y);
+                window.set_rect_width(rect.width);
+                window.set_rect_height(rect.height);
+            }
+
+            window.set_show_snap(live.snap.is_some());
+            window.set_snap_snapped(live.snapped);
+            if let Some((x, y)) = live.snap {
+                window.set_snap_x(x);
+                window.set_snap_y(y);
+            }
+
+            match live.chip {
+                Some((text, x, y)) => {
+                    window.set_chip_text(text.into());
+                    window.set_chip_x(x);
+                    window.set_chip_y(y);
+                }
+                None => window.set_chip_text(SharedString::new()),
+            }
+            window.set_hint_text(live.hint.unwrap_or_default().into());
         }
     }
 
@@ -334,4 +540,17 @@ fn wire(window: &Overlay, monitor: usize) {
         with_app(|app| handled = app.key(&text, ctrl, shift));
         handled
     });
+}
+
+/// The live marks one window shows, in its logical px.
+#[derive(Default)]
+struct Live {
+    crosshair: Option<(f32, f32, LogicalRays)>,
+    rect: Option<Rect>,
+    /// Whether the placement marker below is pulled onto an edge.
+    snapped: bool,
+    snap: Option<(f32, f32)>,
+    /// Text and the point it is anchored to.
+    chip: Option<(String, f32, f32)>,
+    hint: Option<&'static str>,
 }

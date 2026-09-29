@@ -226,6 +226,13 @@ impl Mode {
     pub fn snaps(self) -> bool {
         self.controls().contains(&Control::SnapDistance)
     }
+
+    /// True for the modes that have nothing to show until the edge map is
+    /// ready. The others work without it: the colour picker reads the
+    /// screenshot, and dragging or placing points just does not snap yet.
+    pub fn needs_edges(self) -> bool {
+        matches!(self, Mode::Crosshair | Mode::Container)
+    }
 }
 
 /// What a placed annotation records.

@@ -107,6 +107,76 @@ component Crosshair {
     }
 }
 
+// A 1 px accent outline. `animated` eases it between positions (a new
+// container, a selection tightening) instead of jumping; while the user is
+// dragging it must follow the pointer exactly, so it is off then.
+component Outline inherits Rectangle {
+    in property <bool> animated;
+
+    border-width: 1px;
+    border-color: Theme.accent;
+
+    animate x, y, width, height {
+        duration: root.animated ? 110ms : 0ms;
+        easing: ease-out;
+    }
+}
+
+// Where a point placed now would land, in the snapping modes: a white
+// cross that turns accent, grows and gains a ring once pulled onto an edge.
+component SnapMarker {
+    in property <length> cx;
+    in property <length> cy;
+    in property <bool> snapped;
+
+    property <length> arm: root.snapped ? 6px : 5px;
+    property <color> ink: root.snapped ? Theme.accent : Theme.text;
+
+    Rectangle {
+        x: root.cx - root.arm;
+        y: root.cy;
+        width: 2 * root.arm + 1px;
+        height: 1px;
+        background: root.ink;
+    }
+    Rectangle {
+        x: root.cx;
+        y: root.cy - root.arm;
+        width: 1px;
+        height: 2 * root.arm + 1px;
+        background: root.ink;
+    }
+    if root.snapped: Rectangle {
+        x: root.cx - 3px;
+        y: root.cy - 3px;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
+        border-width: 1px;
+        border-color: Theme.accent;
+    }
+}
+
+// A message near the bottom of the screen, centred horizontally: with no
+// `x` set, Slint centres an element in its parent.
+component Hint inherits Rectangle {
+    in property <string> text;
+
+    visible: root.text != "";
+    width: label.preferred-width + 36px;
+    height: label.preferred-height + 20px;
+    background: Theme.panel;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.accent;
+
+    label := Text {
+        text: root.text;
+        color: Theme.text;
+        font-size: Theme.chip-font-size;
+    }
+}
+
 export component Overlay inherits Window {
     in property <image> backdrop;
     // The edge map, white on transparent, and how visible it is (0 = off).
@@ -118,7 +188,24 @@ export component Overlay inherits Window {
     in property <length> cursor-x;
     in property <length> cursor-y;
     in property <Rays> rays;
+
+    in property <bool> show-rect;
+    in property <bool> rect-animated;
+    in property <length> rect-x;
+    in property <length> rect-y;
+    in property <length> rect-width;
+    in property <length> rect-height;
+
+    // The placement marker in the snapping modes, and whether it snapped.
+    in property <bool> show-snap;
+    in property <bool> snap-snapped;
+    in property <length> snap-x;
+    in property <length> snap-y;
+
     in property <string> chip-text;
+    in property <length> chip-x;
+    in property <length> chip-y;
+    in property <string> hint-text;
 
     callback pointer-moved(length, length);
     callback pointer-pressed(length, length);
@@ -184,12 +271,34 @@ export component Overlay inherits Window {
                 rays: root.rays;
             }
 
+            Outline {
+                visible: root.show-rect;
+                animated: root.rect-animated;
+                x: root.rect-x;
+                y: root.rect-y;
+                width: root.rect-width;
+                height: root.rect-height;
+            }
+
+            if root.show-snap: SnapMarker {
+                width: 100%;
+                height: 100%;
+                cx: root.snap-x;
+                cy: root.snap-y;
+                snapped: root.snap-snapped;
+            }
+
             Chip {
                 text: root.chip-text;
-                anchor-x: root.cursor-x;
-                anchor-y: root.cursor-y;
+                anchor-x: root.chip-x;
+                anchor-y: root.chip-y;
                 canvas-width: root.width;
                 canvas-height: root.height;
+            }
+
+            Hint {
+                text: root.hint-text;
+                y: root.height - self.height - 48px;
             }
         }
     }

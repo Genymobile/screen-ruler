@@ -69,7 +69,8 @@ fn run(options: &Options) -> Result<(), String> {
         .collect::<Result<Vec<_>, _>>()?;
     let surfaces = monitors
         .into_iter()
-        .map(|m| Surface::new(m.geometry, m.image))
+        .enumerate()
+        .map(|(index, m)| Surface::new(index, m.geometry, m.image))
         .collect();
 
     let state = RulerState::new(options.sensitivity, options.debug_edges);

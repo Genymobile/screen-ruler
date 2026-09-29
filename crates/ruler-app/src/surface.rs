@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use image::RgbaImage;
 use ruler_core::edges::EdgeMap;
-use ruler_core::geometry::{scale_from_widths, MonitorGeometry};
-use ruler_core::measure;
+use ruler_core::geometry::{scale_from_widths, MonitorGeometry, Rect};
+use ruler_core::measure::{self, PixelRect};
+use ruler_core::regions::RegionMap;
 
 /// Crosshair ray lengths from the cursor to the nearest edge, logical px.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,19 +28,26 @@ impl LogicalRays {
 }
 
 pub struct Surface {
+    /// Index of this monitor, as `Point`/`Rect` record it.
+    pub monitor: usize,
     pub geometry: MonitorGeometry,
     /// Shared with the analysis thread.
     pub image: Arc<RgbaImage>,
     /// `None` until the first analysis for this monitor lands.
     pub edges: Option<EdgeMap>,
+    /// Connected regions between edges, for container detection; built
+    /// alongside `edges`.
+    pub regions: Option<RegionMap>,
 }
 
 impl Surface {
-    pub fn new(geometry: MonitorGeometry, image: RgbaImage) -> Self {
+    pub fn new(monitor: usize, geometry: MonitorGeometry, image: RgbaImage) -> Self {
         Self {
+            monitor,
             geometry,
             image: Arc::new(image),
             edges: None,
+            regions: None,
         }
     }
 
@@ -80,12 +88,76 @@ impl Surface {
     }
 }
 
+impl Surface {
+    /// Pulls a logical point onto nearby edges within `radius` logical px.
+    ///
+    /// `None` when nothing was in range (or the edge map is not ready), so an
+    /// unmoved point is never mistaken for a snapped one. Each axis snaps on
+    /// its own, which is what makes dragging onto a UI border predictable.
+    pub fn snap(&self, x: f32, y: f32, radius: f32) -> Option<(f32, f32)> {
+        let edges = self.edges.as_ref()?;
+        if radius <= 0.0 {
+            return None;
+        }
+        let (px, py) = self.logical_to_pixel(x, y);
+        let scale = self.geometry.sanitised_scale();
+        let radius = (radius * scale).ceil() as u32;
+        // The perpendicular search band grows with density, so snapping
+        // feels the same on a 2x panel as on a 1x one.
+        let band = scale.ceil().max(1.0) as u32;
+        let (sx, sy) = measure::snap_to_edge(edges, px, py, radius, band)?;
+        Some(self.geometry.image_to_logical(sx as f32, sy as f32))
+    }
+
+    /// Bounding box of the UI container under a logical point.
+    pub fn container_at(&self, x: f32, y: f32) -> Option<Rect> {
+        let (px, py) = self.logical_to_pixel(x, y);
+        let stats = self.regions.as_ref()?.container_at(px, py)?;
+        Some(self.logical_rect(stats.x, stats.y, stats.width, stats.height))
+    }
+
+    /// Tightens a logical rectangle onto the content it encloses. The rect is
+    /// returned unchanged while the edge map is not ready.
+    pub fn shrink(&self, rect: Rect) -> Rect {
+        let Some(edges) = self.edges.as_ref() else {
+            return rect;
+        };
+        let (x0, y0) = self.geometry.logical_to_image(rect.x, rect.y);
+        let (x1, y1) = self
+            .geometry
+            .logical_to_image(rect.x + rect.width, rect.y + rect.height);
+        let pixels = PixelRect::from_corners(
+            x0.round() as i32,
+            y0.round() as i32,
+            x1.round() as i32,
+            y1.round() as i32,
+            self.image.width().saturating_sub(1),
+            self.image.height().saturating_sub(1),
+        );
+        let shrunk = measure::shrink_to_content(edges, pixels);
+        self.logical_rect(shrunk.left, shrunk.top, shrunk.width(), shrunk.height())
+    }
+
+    /// An image-pixel rectangle as a logical one on this monitor.
+    fn logical_rect(&self, x: u32, y: u32, width: u32, height: u32) -> Rect {
+        let (lx, ly) = self.geometry.image_to_logical(x as f32, y as f32);
+        Rect {
+            monitor: self.monitor,
+            x: lx,
+            y: ly,
+            width: self.geometry.image_len_to_logical(width as f32),
+            height: self.geometry.image_len_to_logical(height as f32),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn surface(width: u32, height: u32, scale: f32) -> Surface {
         Surface::new(
+            0,
             MonitorGeometry {
                 name: "TEST".to_string(),
                 position: (0, 0),
@@ -132,5 +204,44 @@ mod tests {
         // A nonsensical width leaves it alone.
         s.reconcile_scale(0.0);
         assert_eq!(s.geometry.scale, 2.0);
+    }
+
+    /// An edge map with one vertical edge column at image x = `column`.
+    fn with_column(mut s: Surface, column: u32) -> Surface {
+        let (w, h) = (s.image.width(), s.image.height());
+        let data = (0..w * h).map(|i| i % w == column).collect();
+        s.edges = EdgeMap::new(w, h, data);
+        s
+    }
+
+    #[test]
+    fn snapping_pulls_onto_an_edge_within_the_radius() {
+        let s = with_column(surface(40, 40, 1.0), 20);
+        let (x, y) = s.snap(17.0, 10.0, 5.0).expect("edge in range");
+        assert_eq!((x, y), (20.0, 10.0), "snaps in x, keeps y");
+        assert_eq!(s.snap(10.0, 10.0, 5.0), None, "edge out of range");
+        assert_eq!(s.snap(19.0, 10.0, 0.0), None, "a zero radius never snaps");
+    }
+
+    #[test]
+    fn the_snap_radius_is_logical() {
+        // At 2x, 5 logical px reach 10 image px: an edge 8 image px away.
+        let s = with_column(surface(40, 40, 2.0), 20);
+        let (x, _) = s.snap(6.0, 5.0, 5.0).expect("edge in range");
+        assert_eq!(x, 10.0);
+    }
+
+    #[test]
+    fn the_rect_tools_wait_for_the_analysis() {
+        let s = surface(10, 10, 1.0);
+        assert_eq!(s.container_at(5.0, 5.0), None);
+        let rect = Rect {
+            monitor: 0,
+            x: 1.0,
+            y: 1.0,
+            width: 5.0,
+            height: 5.0,
+        };
+        assert_eq!(s.shrink(rect), rect);
     }
 }

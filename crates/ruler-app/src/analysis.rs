@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use image::RgbaImage;
-use ruler_core::analysis;
+use ruler_core::analysis::{self, Analysis};
 use ruler_core::edges::EdgeMap;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
@@ -26,7 +26,7 @@ pub const DEBOUNCE: Duration = Duration::from_millis(30);
 pub fn spawn(
     images: Vec<Arc<RgbaImage>>,
     thresholds: (u16, u16),
-    deliver: impl FnOnce(Vec<EdgeMap>) + Send + 'static,
+    deliver: impl FnOnce(Vec<Analysis>) + Send + 'static,
 ) {
     std::thread::spawn(move || deliver(analysis::analyse_all(&images, thresholds)));
 }
