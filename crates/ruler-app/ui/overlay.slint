@@ -4,6 +4,9 @@
 // side converts to and from image pixels.
 
 import { Theme } from "theme.slint";
+import { Dial, Panel, Help } from "panel.slint";
+
+export { Dial }
 
 // Ray lengths from the cursor to the nearest edge, in logical px.
 export struct Rays {
@@ -420,6 +423,19 @@ export component Overlay inherits Window {
     in property <length> chip-offset-y: 4px;
     in property <string> hint-text;
 
+    // Chrome, only on the monitor the pointer is on.
+    in property <bool> show-chrome;
+    in property <int> mode;
+    in property <[string]> mode-tooltips;
+    in property <[Dial]> dials;
+    in property <[string]> help-lines;
+    in property <float> help-opacity;
+    in property <bool> help-visible;
+    callback mode-clicked(int);
+    callback dial-changed(int, float);
+    callback help-clicked();
+    callback help-hovered();
+
     callback pointer-moved(length, length);
     callback pointer-pressed(length, length);
     callback pointer-released(length, length);
@@ -437,7 +453,7 @@ export component Overlay inherits Window {
                 ? accept : reject
         }
 
-        TouchArea {
+        canvas := TouchArea {
             pointer-event(event) => {
                 if (event.kind == PointerEventKind.move) {
                     root.pointer-moved(self.mouse-x, self.mouse-y);
@@ -562,6 +578,31 @@ export component Overlay inherits Window {
             Hint {
                 text: root.hint-text;
                 y: root.height - self.height - 48px;
+            }
+
+            panel := Panel {
+                visible: root.show-chrome;
+                x: (root.width - self.width) / 2;
+                y: 14px;
+                mode: root.mode;
+                mode-tooltips: root.mode-tooltips;
+                dials: root.dials;
+                mode-clicked(index) => { root.mode-clicked(index); }
+                dial-changed(index, value) => { root.dial-changed(index, value); }
+                help-visible: root.help-visible;
+                help-clicked => { root.help-clicked(); }
+            }
+
+            Help {
+                visible: root.show-chrome && root.help-opacity > 0.01;
+                opacity: root.help-opacity;
+                x: panel.x;
+                y: panel.y + panel.height + 10px;
+                lines: root.help-lines;
+                pointer-inside: canvas.has-hover
+                    && canvas.mouse-x >= self.x && canvas.mouse-x < self.x + self.width
+                    && canvas.mouse-y >= self.y && canvas.mouse-y < self.y + self.height;
+                hovered => { root.help-hovered(); }
             }
         }
     }

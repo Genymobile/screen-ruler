@@ -17,16 +17,16 @@ use ruler_core::color::KernelCache;
 use ruler_core::edges;
 use ruler_core::geometry::{Point, Rect};
 use ruler_core::state::{
-    format_distance, format_size, shows_delta_breakdown, Command, Destructive, DragState, Mode,
-    RulerState,
+    format_distance, format_size, shows_delta_breakdown, Command, Control, Destructive, DragState,
+    Mode, RulerState, HELP_FADE, MODE_COUNT,
 };
 use slint::platform::Key;
-use slint::{ComponentHandle, SharedString, Timer, TimerMode};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::analysis;
 use crate::input::{self, Wheel};
 use crate::surface::{LogicalRays, Surface};
-use crate::{Overlay, Rays};
+use crate::{Dial, Overlay, Rays};
 
 /// Redraw interval while something animates (the edge preview fade).
 const FRAME: Duration = Duration::from_millis(16);
@@ -70,6 +70,12 @@ pub struct App {
     preview_since: Option<Instant>,
     /// Rendered edge maps, built only once something shows them.
     edge_images: Vec<Option<slint::Image>>,
+    /// Edges found across all monitors, for the sensitivity readout.
+    edge_count: Option<usize>,
+    /// Per-window models, kept and updated in place: replacing them would
+    /// rebuild the rows, and a slider being dragged would lose its grab.
+    dial_models: Vec<Rc<VecModel<Dial>>>,
+    help_models: Vec<Rc<VecModel<SharedString>>>,
     recompute_timer: Timer,
     frame_timer: Timer,
 }
@@ -78,12 +84,15 @@ impl App {
     /// Takes ownership of the windows and surfaces, wires every window's
     /// callbacks, and starts the first analysis.
     pub fn start(
-        state: RulerState,
+        mut state: RulerState,
         surfaces: Vec<Surface>,
         windows: Vec<Overlay>,
         thresholds: Option<(u16, u16)>,
     ) -> Shared {
         let count = surfaces.len();
+        // The help stays up until it is dismissed, rather than timing out
+        // before it has been read.
+        state.help_auto_hide_at = None;
         let app = Rc::new(RefCell::new(App {
             state,
             surfaces,
@@ -97,6 +106,9 @@ impl App {
             generation: 0,
             preview_since: None,
             edge_images: vec![None; count],
+            edge_count: None,
+            dial_models: (0..count).map(|_| Rc::new(VecModel::default())).collect(),
+            help_models: (0..count).map(|_| Rc::new(VecModel::default())).collect(),
             recompute_timer: Timer::default(),
             frame_timer: Timer::default(),
         }));
@@ -104,12 +116,21 @@ impl App {
 
         {
             let app = app.borrow();
+            let tooltips: Vec<SharedString> = Mode::ALL
+                .iter()
+                .map(|mode| format!("{}  ({})", mode.label(), mode.digit()).into())
+                .collect();
             for (monitor, window) in app.windows.iter().enumerate() {
                 wire(window, monitor);
+                window.set_mode_tooltips(ModelRc::new(VecModel::from(tooltips.clone())));
+                window.set_dials(ModelRc::from(app.dial_models[monitor].clone()));
+                window.set_help_lines(ModelRc::from(app.help_models[monitor].clone()));
             }
         }
-        app.borrow_mut().analyse();
-        app.borrow_mut().render();
+        let mut started = app.borrow_mut();
+        started.analyse();
+        started.render();
+        drop(started);
         app
     }
 
@@ -189,6 +210,8 @@ impl App {
     }
 
     fn pointer_pressed(&mut self, monitor: usize, x: f32, y: f32) {
+        // Starting a measurement is a sign the help has been read.
+        self.dismiss_help();
         self.press = Some((monitor, x, y));
         if self.state.mode.is_rect_selection() {
             // Kept aside: if this press turns out to be a click, it confirms
@@ -276,6 +299,37 @@ impl App {
         }
     }
 
+    fn mode_clicked(&mut self, index: usize) {
+        if let Some(mode) = Mode::from_index(index) {
+            self.state.set_mode(mode);
+            self.refresh_derived();
+            self.render();
+        }
+    }
+
+    fn help_clicked(&mut self) {
+        self.state.toggle_help();
+        self.render();
+    }
+
+    /// Fades the help out, when it is showing and not already fading.
+    fn dismiss_help(&mut self) {
+        if self.state.help_visible && self.state.help_auto_hide_at.is_none() {
+            self.state.help_auto_hide_at = Some(Instant::now());
+            self.animate();
+            self.render();
+        }
+    }
+
+    fn dial_changed(&mut self, index: usize, value: f32) {
+        if let Some(&control) = self.state.mode.controls().get(index) {
+            self.state.set_control_value(control, value.round());
+            self.refresh_derived();
+            self.process_commands();
+            self.render();
+        }
+    }
+
     fn wheel(&mut self, delta: f32) {
         let notches = self.wheel.feed(delta);
         if notches != 0 {
@@ -313,6 +367,9 @@ impl App {
             if self.state.mode.is_rect_selection() {
                 self.confirm_selection();
             }
+            true
+        } else if !ctrl && (text == "?" || text.eq_ignore_ascii_case("h")) {
+            self.state.toggle_help();
             true
         } else if !ctrl && text.eq_ignore_ascii_case("q") {
             self.state.request_destructive(Destructive::Quit);
@@ -390,24 +447,42 @@ impl App {
             surface.regions = Some(result.regions);
             *image = None;
         }
+        self.edge_count = Some(
+            self.surfaces
+                .iter()
+                .filter_map(|s| s.edges.as_ref())
+                .map(|e| e.count())
+                .sum(),
+        );
         // Snapping and the container were derived from the old maps.
         self.refresh_derived();
         // Flash the new map, unless this is the start-up analysis nobody
         // asked to see.
         if !first {
             self.preview_since = Some(Instant::now());
+            self.animate();
+        }
+        self.render();
+    }
+
+    /// Keeps frames coming while something fades (the edge preview, the
+    /// start-up help); `tick` stops them once nothing does.
+    fn animate(&mut self) {
+        if !self.frame_timer.running() {
             self.frame_timer
                 .start(TimerMode::Repeated, FRAME, || with_app(App::tick));
         }
-        self.render();
     }
 
     fn tick(&mut self) {
         if let Some(since) = self.preview_since {
             if input::preview_finished(since.elapsed()) {
                 self.preview_since = None;
-                self.frame_timer.stop();
             }
+        }
+        let help_fading = self.state.help_visible && self.state.help_auto_hide_at.is_some();
+        if self.preview_since.is_none() && !help_fading {
+            self.frame_timer.stop();
         }
         self.render();
     }
@@ -519,6 +594,17 @@ impl App {
             self.preview_since.map(|t| t.elapsed()),
         );
         let dragging = self.state.drag.active;
+        let (help, help_visible) = input::help_opacity(
+            self.state.help_visible,
+            self.state.help_auto_hide_at,
+            HELP_FADE,
+            Instant::now(),
+        );
+        if !help_visible && self.state.help_visible {
+            // Faded out: hidden for good, until toggled back.
+            self.state.help_visible = false;
+            self.state.help_auto_hide_at = None;
+        }
 
         for monitor in 0..self.windows.len() {
             let live = self.live(monitor);
@@ -597,7 +683,42 @@ impl App {
                 None => window.set_chip_text(SharedString::new()),
             }
             window.set_hint_text(live.hint.unwrap_or_default().into());
+
+            let chrome = monitor == self.state.active_monitor;
+            window.set_show_chrome(chrome);
+            if chrome {
+                window.set_mode(self.state.mode.index() as i32);
+                window.set_help_opacity(help);
+                window.set_help_visible(self.state.help_visible);
+                sync(&self.dial_models[monitor], self.dials());
+                sync(&self.help_models[monitor], help_lines(self.state.mode));
+            }
         }
+    }
+
+    /// The current mode's dials, as the panel shows them.
+    fn dials(&self) -> Vec<Dial> {
+        self.state
+            .mode
+            .controls()
+            .iter()
+            .map(|&control| {
+                let value = self.state.control_value(control);
+                let readout = match (control, self.edge_count) {
+                    (Control::Sensitivity, Some(edges)) => {
+                        format!("{}  ·  {edges} edges", value.round())
+                    }
+                    (Control::Sensitivity, None) => format!("{}", value.round()),
+                    _ => format!("{} px", value.round()),
+                };
+                Dial {
+                    title: control.title().into(),
+                    value,
+                    max: control.max(),
+                    readout: readout.into(),
+                }
+            })
+            .collect()
     }
 
     fn window_logical_width(&self, monitor: usize) -> Option<f32> {
@@ -614,11 +735,52 @@ fn wire(window: &Overlay, monitor: usize) {
     window.on_pointer_released(move |x, y| with_app(|app| app.pointer_released(monitor, x, y)));
     window.on_pointer_left(move || with_app(|app| app.pointer_left(monitor)));
     window.on_wheel(|delta| with_app(|app| app.wheel(delta)));
+    window.on_mode_clicked(|index| with_app(|app| app.mode_clicked(index as usize)));
+    window.on_dial_changed(|index, value| with_app(|app| app.dial_changed(index as usize, value)));
+    window.on_help_clicked(|| with_app(App::help_clicked));
+    window.on_help_hovered(|| with_app(App::dismiss_help));
     window.on_key(|text, ctrl, shift| {
         let mut handled = false;
         with_app(|app| handled = app.key(&text, ctrl, shift));
         handled
     });
+}
+
+/// Updates `model` to `rows`, touching only the rows that changed.
+fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    if model.row_count() != rows.len() {
+        model.set_vec(rows);
+        return;
+    }
+    for (index, row) in rows.into_iter().enumerate() {
+        if model.row_data(index).as_ref() != Some(&row) {
+            model.set_row_data(index, row);
+        }
+    }
+}
+
+/// The shortcut help for `mode`, in quick mode.
+fn help_lines(mode: Mode) -> Vec<SharedString> {
+    let click = match mode {
+        Mode::RectDrag | Mode::ShrinkToFit => {
+            "Drag — select  ·  then click or Enter — copy it, then quit"
+        }
+        Mode::Distance => "Click — place point A, then point B to copy, then quit",
+        Mode::Crosshair | Mode::Container | Mode::ColorPicker => {
+            "Click — copy the measurement, then quit"
+        }
+    };
+    [
+        format!("1–{MODE_COUNT} — switch measurement mode"),
+        click.to_string(),
+        "Ctrl+C — copy the measurement, then quit".to_string(),
+        "Wheel — adjust the first slider".to_string(),
+        "? or H — toggle this help (hover it to hide it)".to_string(),
+        "Esc or Q — quit".to_string(),
+    ]
+    .into_iter()
+    .map(SharedString::from)
+    .collect()
 }
 
 /// The live marks one window shows, in its logical px.

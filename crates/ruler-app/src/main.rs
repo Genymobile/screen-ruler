@@ -5,7 +5,7 @@
 //! which draws the measurement on top.
 
 slint::slint! {
-    export { Overlay, Rays } from "ui/overlay.slint";
+    export { Dial, Overlay, Rays } from "ui/overlay.slint";
 }
 
 mod analysis;

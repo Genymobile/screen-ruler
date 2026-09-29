@@ -1,6 +1,6 @@
 //! Turning raw input into the units the state machine speaks.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Logical px of scroll per wheel notch: what Slint's winit backend reports
 /// for one line of a mouse wheel.
@@ -78,6 +78,30 @@ pub fn preview_finished(since_change: Duration) -> bool {
     since_change >= PREVIEW_HOLD + PREVIEW_FADE
 }
 
+/// Opacity of the start-up help: fully shown until `auto_hide_at`, then a
+/// linear fade over `fade`. `None` for the deadline means it was toggled on
+/// by hand and stays. Returns the opacity and whether it is still visible.
+pub fn help_opacity(
+    visible: bool,
+    auto_hide_at: Option<Instant>,
+    fade: Duration,
+    now: Instant,
+) -> (f32, bool) {
+    match (visible, auto_hide_at) {
+        (false, _) => (0.0, false),
+        (true, None) => (1.0, true),
+        (true, Some(at)) if now < at => (1.0, true),
+        (true, Some(at)) => {
+            let faded = (now - at).as_secs_f32() / fade.as_secs_f32();
+            if faded >= 1.0 {
+                (0.0, false)
+            } else {
+                (1.0 - faded, true)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +148,20 @@ mod tests {
     fn the_debug_overlay_never_drops_below_its_floor() {
         assert_eq!(edges_opacity(true, None), 0.3);
         assert_eq!(edges_opacity(true, Some(Duration::ZERO)), 0.5);
+    }
+
+    #[test]
+    fn the_startup_help_holds_then_fades_away() {
+        let start = Instant::now();
+        let at = start + Duration::from_millis(2000);
+        let fade = Duration::from_millis(200);
+        let opacity = |ms| help_opacity(true, Some(at), fade, start + Duration::from_millis(ms));
+
+        assert_eq!(opacity(0), (1.0, true));
+        assert!((opacity(2100).0 - 0.5).abs() < 1e-3);
+        assert_eq!(opacity(2200), (0.0, false));
+        // Toggled on by hand: no deadline, stays.
+        assert_eq!(help_opacity(true, None, fade, start), (1.0, true));
+        assert_eq!(help_opacity(false, Some(at), fade, start), (0.0, false));
     }
 }
