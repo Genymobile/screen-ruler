@@ -26,6 +26,24 @@ pub fn scale_from_widths(image_width: usize, logical_width: f32) -> Option<f32> 
         .then(|| image_width as f32 / logical_width)
 }
 
+/// A point on a specific monitor, in that monitor's logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Point {
+    pub monitor: usize,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A rectangle on a specific monitor, in that monitor's logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    pub monitor: usize,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// Where one monitor sits in the virtual desktop, and how dense its pixels are.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MonitorGeometry {
@@ -88,6 +106,24 @@ impl MonitorGeometry {
             && y >= self.position.1
             && x < self.position.0 + self.size.0 as i32
             && y < self.position.1 + self.size.1 as i32
+    }
+
+    /// Converts a logical rectangle on this monitor into a device-pixel crop
+    /// `(left, top, width, height)` of a window `window` device px in size.
+    ///
+    /// Clamped to the window, since a drag can end slightly outside it.
+    /// `None` when the rectangle does not overlap the window at all. This is
+    /// what cuts the composite export out of a window snapshot.
+    pub fn device_crop(&self, rect: Rect, window: (u32, u32)) -> Option<(u32, u32, u32, u32)> {
+        let scale = self.sanitised_scale();
+        // Clip both edges, then derive the extent: clamping only the origin
+        // would keep the full width for a rect starting off-window, and the
+        // crop would run past the selection.
+        let edge = |logical: f32, max: u32| (logical * scale).round().clamp(0.0, max as f32) as u32;
+        let (left, right) = (edge(rect.x, window.0), edge(rect.x + rect.width, window.0));
+        let (top, bottom) = (edge(rect.y, window.1), edge(rect.y + rect.height, window.1));
+
+        (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
     }
 }
 
@@ -214,5 +250,58 @@ mod tests {
     #[test]
     fn virtual_bounds_of_no_monitors_is_none() {
         assert_eq!(virtual_bounds(&[]), None);
+    }
+
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            monitor: 0,
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn logical_rects_scale_into_device_crops() {
+        let hidpi = monitor("A", (0, 0), (3840, 2160), 2.0);
+        let crop = hidpi.device_crop(rect(10.0, 20.0, 100.0, 50.0), (3840, 2160));
+        assert_eq!(crop, Some((20, 40, 200, 100)));
+
+        let plain = monitor("B", (0, 0), (1920, 1080), 1.0);
+        let crop = plain.device_crop(rect(10.0, 20.0, 100.0, 50.0), (1920, 1080));
+        assert_eq!(crop, Some((10, 20, 100, 50)));
+    }
+
+    #[test]
+    fn a_crop_running_past_the_window_is_clamped() {
+        let plain = monitor("A", (0, 0), (1920, 1080), 1.0);
+        let crop = plain.device_crop(rect(1900.0, 1070.0, 200.0, 200.0), (1920, 1080));
+        assert_eq!(crop, Some((1900, 1070, 20, 10)));
+    }
+
+    #[test]
+    fn a_crop_starting_off_window_keeps_only_the_overlap() {
+        let plain = monitor("A", (0, 0), (1920, 1080), 1.0);
+        let crop = plain.device_crop(rect(-10.0, -5.0, 20.0, 20.0), (1920, 1080));
+        assert_eq!(crop, Some((0, 0, 10, 15)));
+    }
+
+    #[test]
+    fn degenerate_and_offscreen_crops_are_rejected() {
+        let plain = monitor("A", (0, 0), (1920, 1080), 1.0);
+        let window = (1920, 1080);
+        assert!(plain
+            .device_crop(rect(10.0, 10.0, 0.0, 50.0), window)
+            .is_none());
+        assert!(plain
+            .device_crop(rect(5000.0, 10.0, 50.0, 50.0), window)
+            .is_none());
+        assert!(plain
+            .device_crop(rect(10.0, 5000.0, 50.0, 50.0), window)
+            .is_none());
+        assert!(plain
+            .device_crop(rect(-100.0, 10.0, 50.0, 50.0), window)
+            .is_none());
     }
 }
