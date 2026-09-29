@@ -24,13 +24,33 @@ pub fn to_gray(image: &RgbaImage) -> GrayImage {
     out
 }
 
-/// Sensitivity is a user-facing 0..100 dial; these anchor the Canny
-/// hysteresis thresholds it maps onto, carried over so existing muscle memory
-/// for the slider still holds.
-const LOW_AT_100: f32 = 5.0;
-const HIGH_AT_100: f32 = 25.0;
+/// Sensitivity is a user-facing 0..100 dial mapped piecewise-linearly onto
+/// the Canny hysteresis thresholds, through three anchors.
+///
+/// 0 to 85 is the original mapping, unchanged so the default still matches
+/// the Python app's tuned 16/54 and muscle memory for the slider holds; the
+/// knee values are where that straight line crossed 85. Above it, the dial
+/// now runs on to 2/8 instead of stopping at 5/25: low enough to catch a
+/// faint 1 px separator that the blur flattens (5/25 missed a full-width tab
+/// bar border), while on clean UI captures colour edges barely grow below it
+/// (under 0.3% more down to 1/2), so the top of the dial stays usable rather
+/// than turning to noise.
 const LOW_AT_0: f32 = 80.0;
 const HIGH_AT_0: f32 = 220.0;
+/// Where the original line ended at 100; it is still used up to the knee.
+const LOW_LINE_AT_100: f32 = 5.0;
+const HIGH_LINE_AT_100: f32 = 25.0;
+const KNEE: f32 = 85.0;
+const LOW_AT_100: f32 = 2.0;
+const HIGH_AT_100: f32 = 8.0;
+
+/// The original straight line, computed exactly as it always was.
+fn original_line(s: f32) -> (f32, f32) {
+    (
+        LOW_LINE_AT_100 + (100.0 - s) * ((LOW_AT_0 - LOW_LINE_AT_100) / 100.0),
+        HIGH_LINE_AT_100 + (100.0 - s) * ((HIGH_AT_0 - HIGH_LINE_AT_100) / 100.0),
+    )
+}
 
 /// Default dial position, matching the Python defaults of
 /// `--threshold-low 16 --threshold-high 54`.
@@ -153,8 +173,17 @@ impl EdgeMap {
 /// Higher sensitivity means lower thresholds, so more edges survive.
 pub fn sensitivity_to_thresholds(sensitivity: f32) -> (u16, u16) {
     let s = sensitivity.clamp(0.0, 100.0);
-    let low = (LOW_AT_100 + (100.0 - s) * ((LOW_AT_0 - LOW_AT_100) / 100.0)).round() as u16;
-    let high = (HIGH_AT_100 + (100.0 - s) * ((HIGH_AT_0 - HIGH_AT_100) / 100.0)).round() as u16;
+    let (low, high) = if s <= KNEE {
+        original_line(s)
+    } else {
+        let (low_at_knee, high_at_knee) = original_line(KNEE);
+        let t = (s - KNEE) / (100.0 - KNEE);
+        (
+            lerp(low_at_knee, LOW_AT_100, t),
+            lerp(high_at_knee, HIGH_AT_100, t),
+        )
+    };
+    let (low, high) = (low.round() as u16, high.round() as u16);
     // Hysteresis is meaningless unless the upper threshold is strictly higher.
     let high = if high <= low {
         (low + 1).min(255)
@@ -164,13 +193,24 @@ pub fn sensitivity_to_thresholds(sensitivity: f32) -> (u16, u16) {
     (low, high)
 }
 
+fn lerp(from: f32, to: f32, t: f32) -> f32 {
+    from + (to - from) * t
+}
+
 /// Inverse of [`sensitivity_to_thresholds`], averaging both estimates so
 /// CLI-supplied thresholds land the slider in a sensible spot.
 pub fn thresholds_to_sensitivity(low: u16, high: u16) -> f32 {
-    let low_scale = (LOW_AT_0 - LOW_AT_100) / 100.0;
-    let high_scale = (HIGH_AT_0 - HIGH_AT_100) / 100.0;
-    let from_low = 100.0 - ((low as f32 - LOW_AT_100) / low_scale);
-    let from_high = 100.0 - ((high as f32 - HIGH_AT_100) / high_scale);
+    // Inverts one threshold's piecewise line; values beyond an end clamp.
+    let invert = |value: f32, at_0: f32, at_knee: f32, at_100: f32| {
+        if value >= at_knee {
+            KNEE * (at_0 - value) / (at_0 - at_knee)
+        } else {
+            KNEE + (100.0 - KNEE) * (at_knee - value) / (at_knee - at_100)
+        }
+    };
+    let (low_at_knee, high_at_knee) = original_line(KNEE);
+    let from_low = invert(low as f32, LOW_AT_0, low_at_knee, LOW_AT_100);
+    let from_high = invert(high as f32, HIGH_AT_0, high_at_knee, HIGH_AT_100);
     ((from_low + from_high) / 2.0).clamp(0.0, 100.0)
 }
 
@@ -410,7 +450,7 @@ mod tests {
     fn sensitivity_mapping_is_monotonic_and_ordered() {
         let (low_max, high_max) = sensitivity_to_thresholds(100.0);
         let (low_min, high_min) = sensitivity_to_thresholds(0.0);
-        assert_eq!((low_max, high_max), (5, 25));
+        assert_eq!((low_max, high_max), (2, 8));
         assert_eq!((low_min, high_min), (80, 220));
 
         // More sensitivity must never mean higher thresholds.
@@ -422,6 +462,21 @@ mod tests {
             assert!(current.1 > current.0, "thresholds crossed at {step}");
             previous = current;
         }
+    }
+
+    #[test]
+    fn the_dial_up_to_the_default_maps_as_it_always_did() {
+        // Only the top of the dial was extended: the original straight line
+        // from 80/220 at 0 to 5/25 at 100 still holds from 0 to 85.
+        for step in 0..=85 {
+            let s = step as f32;
+            let old = (
+                (5.0 + (100.0 - s) * 0.75).round() as u16,
+                (25.0 + (100.0 - s) * 1.95).round() as u16,
+            );
+            assert_eq!(sensitivity_to_thresholds(s), old, "at {step}");
+        }
+        assert_eq!(sensitivity_to_thresholds(DEFAULT_SENSITIVITY), (16, 54));
     }
 
     #[test]
