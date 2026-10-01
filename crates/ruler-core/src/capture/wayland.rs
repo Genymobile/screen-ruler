@@ -48,6 +48,9 @@ pub(super) struct OutputLayout {
     pub position: (i32, i32),
     /// Extent, logical px.
     pub size: (i32, i32),
+    /// The output's own resolution, device px in on-screen orientation, when
+    /// the compositor reported a current mode.
+    pub native: Option<(u32, u32)>,
 }
 
 /// One monitor as advertised by the compositor.
@@ -84,10 +87,18 @@ impl OutputInfo {
         } else {
             (width, height)
         };
+        let (mode_w, mode_h) = (self.mode.0.max(0) as u32, self.mode.1.max(0) as u32);
+        let oriented = if self.rotated {
+            (mode_h, mode_w)
+        } else {
+            (mode_w, mode_h)
+        };
+        let native = (mode_w > 0 && mode_h > 0).then_some(oriented);
         OutputLayout {
             name: self.name(),
             position: self.logical_position.unwrap_or(self.position),
             size: self.logical_size.unwrap_or(fallback),
+            native,
         }
     }
 }

@@ -15,6 +15,7 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 use crate::geometry::MonitorGeometry;
+use image::imageops::FilterType;
 use image::RgbaImage;
 
 use super::wayland::{self, OutputLayout};
@@ -135,7 +136,16 @@ fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
 /// The screenshot spans the outputs' logical bounding box at a single
 /// density — compositors render the stitched image at one scale even when
 /// monitors differ — so each output's crop is its logical rectangle times that
-/// density, which also becomes its scale.
+/// density.
+///
+/// That density is the highest output scale, so with mixed scales the other
+/// outputs come back upscaled: a 1x 1920x1080 monitor beside a 1.5x panel is
+/// cropped at 2885x1623, with interpolated pixels. Such a crop is resampled
+/// back to the output's own resolution, which is what the overlay shows it
+/// at, and its scale becomes that resolution over its logical size. (Detail
+/// the compositor's upscale blurred is not recovered, but the image is no
+/// longer softened a second time when drawn, and measures in the output's
+/// real pixels.)
 fn split(desktop: &RgbaImage, layout: &[OutputLayout]) -> Result<Vec<CapturedMonitor>, String> {
     let (bx, by, bw, bh) = logical_bounds(layout).ok_or("compositor reported no usable outputs")?;
 
@@ -169,16 +179,38 @@ fn split(desktop: &RgbaImage, layout: &[OutputLayout]) -> Result<Vec<CapturedMon
             continue;
         }
 
-        let image = image::imageops::crop_imm(desktop, x0, y0, x1 - x0, y1 - y0).to_image();
+        let crop = image::imageops::crop_imm(desktop, x0, y0, x1 - x0, y1 - y0).to_image();
+        let image = match output.native {
+            // Upscaled by the compositor: bring it back down. Never up (a
+            // mode above the crop has no detail to add), and a mode the crop
+            // does not exceed on both axes is not this output's.
+            Some((w, h)) if w + 1 < crop.width() && h + 1 < crop.height() => {
+                image::imageops::resize(&crop, w, h, FilterType::CatmullRom)
+            }
+            // Already at the output's own density, give or take the pixel
+            // rounding the crop edges adds: trim rather than filter, which
+            // would soften the one output that is pixel-exact.
+            Some((w, h))
+                if (w..=w + 1).contains(&crop.width()) && (h..=h + 1).contains(&crop.height()) =>
+            {
+                image::imageops::crop_imm(&crop, 0, 0, w, h).to_image()
+            }
+            _ => crop,
+        };
+        // From the width: the height agrees to within the rounding of the
+        // resample, a fraction of a pixel per thousand.
+        let scale = image.width() as f32 / output.size.0 as f32;
         monitors.push(CapturedMonitor {
             geometry: MonitorGeometry {
                 name: output.name.clone(),
+                // Monitors are matched by name; this position is only a
+                // fallback, in the screenshot's single density.
                 position: (
                     to_device(output.position.0) as i32,
                     to_device(output.position.1) as i32,
                 ),
                 size: (image.width(), image.height()),
-                scale: density,
+                scale,
                 is_primary: false,
             },
             image,
@@ -223,7 +255,64 @@ mod tests {
             name: name.to_string(),
             position,
             size,
+            native: None,
         }
+    }
+
+    fn native(mut output: OutputLayout, w: u32, h: u32) -> OutputLayout {
+        output.native = Some((w, h));
+        output
+    }
+
+    #[test]
+    fn mixed_scales_bring_each_output_back_to_its_own_resolution() {
+        // A 1x 100x50 output beside a 1.5x one (logical 100x50, 150x75 px):
+        // the screenshot is rendered at 1.5 throughout.
+        let layout = [
+            native(output("ONE", (0, 0), (100, 50)), 100, 50),
+            native(output("HIDPI", (100, 0), (100, 50)), 150, 75),
+        ];
+        let monitors = split(&desktop(300, 75), &layout).expect("split");
+
+        assert_eq!(monitors[0].image.dimensions(), (100, 50));
+        assert_eq!(monitors[0].geometry.size, (100, 50));
+        assert_eq!(monitors[0].geometry.scale, 1.0);
+        // The output at the screenshot's own density is cut, not resampled.
+        assert_eq!(monitors[1].image.dimensions(), (150, 75));
+        assert_eq!(monitors[1].geometry.scale, 1.5);
+        assert_eq!(monitors[1].image.get_pixel(0, 0).0[0], 150);
+    }
+
+    #[test]
+    fn a_crop_a_pixel_over_its_mode_is_trimmed_not_resampled() {
+        // Crop edges are rounded logical x density, so the output already at
+        // the screenshot's density can come out one pixel over its mode.
+        let layout = [native(output("HIDPI", (0, 0), (100, 50)), 149, 74)];
+        let monitors = split(&desktop(150, 75), &layout).expect("split");
+        assert_eq!(monitors[0].image.dimensions(), (149, 74));
+        // Pixels are the screenshot's own, unfiltered.
+        assert_eq!(monitors[0].image.get_pixel(37, 0).0[0], 37);
+    }
+
+    #[test]
+    fn a_mode_matching_only_one_axis_leaves_the_crop_alone() {
+        // Over by one on height, by far on width: not this output's mode, and
+        // trimming would throw most of the image away.
+        let layout = [native(output("A", (0, 0), (150, 75)), 100, 74)];
+        let monitors = split(&desktop(150, 75), &layout).expect("split");
+        assert_eq!(monitors[0].image.dimensions(), (150, 75));
+    }
+
+    #[test]
+    fn a_native_size_is_never_scaled_up_to() {
+        // A mode larger than the crop (or not matching it on both axes) is
+        // not something to resample towards.
+        let layout = [native(output("A", (0, 0), (100, 50)), 200, 100)];
+        let monitors = split(&desktop(100, 50), &layout).expect("split");
+        assert_eq!(monitors[0].image.dimensions(), (100, 50));
+        let layout = [native(output("A", (0, 0), (100, 50)), 80, 60)];
+        let monitors = split(&desktop(100, 50), &layout).expect("split");
+        assert_eq!(monitors[0].image.dimensions(), (100, 50));
     }
 
     /// A desktop image whose red channel encodes the column, so crops can be
