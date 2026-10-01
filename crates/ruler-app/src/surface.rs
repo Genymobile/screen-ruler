@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use image::RgbaImage;
+use ruler_core::boundary::Bounds;
 use ruler_core::color::{KernelCache, Sample};
 use ruler_core::edges::EdgeMap;
 use ruler_core::geometry::{scale_from_widths, MonitorGeometry, Rect};
@@ -75,16 +76,20 @@ impl Surface {
 
     /// Rays from a logical point to the nearest edge in each direction, or
     /// `None` while the edge map is not ready.
+    ///
+    /// Each ray ends on its edge's boundary (see `ruler_core::boundary`), so
+    /// the span is exact whichever pixel of the edge the map marked. A
+    /// boundary can sit inside the cursor's own pixel; that ray is then empty
+    /// rather than pointing backwards.
     pub fn rays_at(&self, x: f32, y: f32) -> Option<LogicalRays> {
         let edges = self.edges.as_ref()?;
         let (px, py) = self.logical_to_pixel(x, y);
-        let rays = measure::cast_rays(edges, px, py);
-        let to_logical = |len: u32| self.geometry.image_len_to_logical(len as f32);
+        let bounds = self.logical_bounds(measure::measure_around(edges, &self.image, px, py));
         Some(LogicalRays {
-            north: to_logical(rays.north),
-            south: to_logical(rays.south),
-            west: to_logical(rays.west),
-            east: to_logical(rays.east),
+            north: (y - bounds.top).max(0.0),
+            south: (bounds.bottom - y).max(0.0),
+            west: (x - bounds.left).max(0.0),
+            east: (bounds.right - x).max(0.0),
         })
     }
 }
@@ -100,21 +105,23 @@ impl Surface {
         if radius <= 0.0 {
             return None;
         }
-        let (px, py) = self.logical_to_pixel(x, y);
+        let (ix, iy) = self.geometry.logical_to_image(x, y);
         let scale = self.geometry.sanitised_scale();
         let radius = (radius * scale).ceil() as u32;
         // The perpendicular search band grows with density, so snapping
         // feels the same on a 2x panel as on a 1x one.
         let band = scale.ceil().max(1.0) as u32;
-        let (sx, sy) = measure::snap_to_edge(edges, px, py, radius, band)?;
-        Some(self.geometry.image_to_logical(sx as f32, sy as f32))
+        let (sx, sy) = measure::snap_to_boundary(edges, &self.image, ix, iy, radius, band)?;
+        Some(self.geometry.image_to_logical(sx, sy))
     }
 
     /// Bounding box of the UI container under a logical point.
     pub fn container_at(&self, x: f32, y: f32) -> Option<Rect> {
         let (px, py) = self.logical_to_pixel(x, y);
         let stats = self.regions.as_ref()?.container_at(px, py)?;
-        Some(self.logical_rect(stats.x, stats.y, stats.width, stats.height))
+        let bounds =
+            measure::region_bounds(&self.image, stats.x, stats.y, stats.width, stats.height);
+        Some(self.logical_rect(bounds))
     }
 
     /// Tightens a logical rectangle onto the content it encloses. The rect is
@@ -135,8 +142,7 @@ impl Surface {
             self.image.width().saturating_sub(1),
             self.image.height().saturating_sub(1),
         );
-        let shrunk = measure::shrink_to_content(edges, pixels);
-        self.logical_rect(shrunk.left, shrunk.top, shrunk.width(), shrunk.height())
+        self.logical_rect(measure::shrink_to_bounds(edges, &self.image, pixels))
     }
 
     /// The colour under a logical point, averaged over `radius` logical px,
@@ -155,15 +161,27 @@ impl Surface {
         (self.geometry.image_to_logical(px as f32, py as f32), sample)
     }
 
-    /// An image-pixel rectangle as a logical one on this monitor.
-    fn logical_rect(&self, x: u32, y: u32, width: u32, height: u32) -> Rect {
-        let (lx, ly) = self.geometry.image_to_logical(x as f32, y as f32);
+    /// Image-pixel boundaries as logical ones on this monitor.
+    fn logical_bounds(&self, bounds: Bounds) -> Bounds {
+        let (left, top) = self.geometry.image_to_logical(bounds.left, bounds.top);
+        let (right, bottom) = self.geometry.image_to_logical(bounds.right, bounds.bottom);
+        Bounds {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// Image-pixel boundaries as a logical rectangle on this monitor.
+    fn logical_rect(&self, bounds: Bounds) -> Rect {
+        let bounds = self.logical_bounds(bounds);
         Rect {
             monitor: self.monitor,
-            x: lx,
-            y: ly,
-            width: self.geometry.image_len_to_logical(width as f32),
-            height: self.geometry.image_len_to_logical(height as f32),
+            x: bounds.left,
+            y: bounds.top,
+            width: bounds.width(),
+            height: bounds.height(),
         }
     }
 }
@@ -274,5 +292,65 @@ mod tests {
         // 2.3 logical is image px 4 (4.6 truncated), back to 2.0 logical.
         assert_eq!((x, y), (2.0, 1.5));
         assert_eq!(sample.hex(), "#E6195E");
+    }
+
+    /// A 1.5x capture of a black 137 x 89 logical box on white, at logical
+    /// (40, 30): its edges fall between device pixels and are antialiased,
+    /// as a compositor draws them. Analysed by the real pipeline.
+    fn fractional_box() -> Surface {
+        let scale = 1.502_343_8_f32;
+        let (x0, y0, x1, y1) = (40.0 * scale, 30.0 * scale, 177.0 * scale, 119.0 * scale);
+        let overlap = |p: u32, a: f32, b: f32| ((p + 1) as f32).min(b) - (p as f32).max(a);
+        let image = RgbaImage::from_fn(330, 240, |x, y| {
+            let cover = overlap(x, x0, x1).max(0.0) * overlap(y, y0, y1).max(0.0);
+            let v = (255.0 * (1.0 - cover)).round() as u8;
+            image::Rgba([v, v, v, 255])
+        });
+        let analysis = ruler_core::analysis::Analysis::of(
+            &image,
+            ruler_core::edges::sensitivity_to_thresholds(ruler_core::edges::DEFAULT_SENSITIVITY),
+        );
+        let mut s = surface(330, 240, scale);
+        s.image = Arc::new(image);
+        s.edges = Some(analysis.edges);
+        s.regions = Some(analysis.regions);
+        s
+    }
+
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.05
+    }
+
+    #[test]
+    fn every_tool_measures_a_fractional_box_exactly() {
+        let s = fractional_box();
+
+        let (w, h) = s.rays_at(100.0, 70.0).expect("analysed").size();
+        assert!(near(w, 137.0) && near(h, 89.0), "crosshair {w} x {h}");
+
+        let c = s.container_at(100.0, 70.0).expect("a container");
+        assert!(
+            near(c.width, 137.0) && near(c.height, 89.0),
+            "container {c:?}"
+        );
+        assert!(near(c.x, 40.0) && near(c.y, 30.0), "container {c:?}");
+
+        let loose = Rect {
+            monitor: 0,
+            x: 25.0,
+            y: 15.0,
+            width: 175.0,
+            height: 120.0,
+        };
+        let r = s.shrink(loose);
+        assert!(near(r.width, 137.0) && near(r.height, 89.0), "shrink {r:?}");
+
+        // Corner to corner, as a drag does: both corners snap onto the box.
+        let (ax, ay) = s.snap(42.0, 32.0, 10.0).expect("near the corner");
+        let (bx, by) = s.snap(175.0, 117.0, 10.0).expect("near the corner");
+        assert!(
+            near(bx - ax, 137.0) && near(by - ay, 89.0),
+            "snapped {ax},{ay} -> {bx},{by}"
+        );
     }
 }

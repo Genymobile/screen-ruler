@@ -6,6 +6,7 @@
 //! draws the state and carries out the commands it emits.
 
 pub mod analysis;
+pub mod boundary;
 pub mod capture;
 pub mod clipboard;
 pub mod color;
