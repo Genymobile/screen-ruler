@@ -1,0 +1,609 @@
+// One overlay window per monitor: the frozen screenshot, the edge map when
+// asked for, and the live measurement marks for whichever monitor the
+// pointer is on. Everything here is in the window's logical pixels; the Rust
+// side converts to and from image pixels.
+
+import { Theme } from "theme.slint";
+import { Dial, Panel, Help } from "panel.slint";
+
+export { Dial }
+
+// Ray lengths from the cursor to the nearest edge, in logical px.
+export struct Rays {
+    north: length,
+    south: length,
+    west: length,
+    east: length,
+}
+
+// A text chip that sits next to an anchor point, flipping to the other side
+// of it when it would overflow the canvas, then clamped inside it.
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    in property <length> offset-x: 14px;
+    in property <length> offset-y: 4px;
+    in property <length> canvas-width;
+    in property <length> canvas-height;
+
+    property <length> margin: 2px;
+    property <length> desired-x: root.anchor-x + root.offset-x;
+    property <length> desired-y: root.anchor-y + root.offset-y;
+    property <length> flipped-x: root.desired-x + root.width + root.margin > root.canvas-width
+        ? max(root.margin, root.anchor-x - root.offset-x - root.width) : root.desired-x;
+    property <length> flipped-y: root.desired-y + root.height + root.margin > root.canvas-height
+        ? max(root.margin, root.anchor-y - root.offset-y - root.height) : root.desired-y;
+
+    visible: root.text != "";
+    x: max(root.margin, min(root.flipped-x, root.canvas-width - root.width - root.margin));
+    y: max(root.margin, min(root.flipped-y, root.canvas-height - root.height - root.margin));
+    width: label.preferred-width + 18px;
+    height: label.preferred-height + 12px;
+    background: Theme.panel;
+    border-radius: Theme.radius;
+    drop-shadow-offset-x: 2px;
+    drop-shadow-offset-y: 2px;
+    drop-shadow-color: Theme.shadow;
+
+    label := Text {
+        text: root.text;
+        color: Theme.text;
+        font-family: Theme.mono;
+        font-size: Theme.chip-font-size;
+    }
+}
+
+// Accent lines from the cursor out to each ray's end, capped with short
+// perpendicular ticks.
+component Crosshair {
+    in property <length> cx;
+    in property <length> cy;
+    in property <Rays> rays;
+
+    property <length> cap: 5px;
+
+    // Vertical and horizontal lines.
+    Rectangle {
+        x: root.cx;
+        y: root.cy - root.rays.north;
+        width: 1px;
+        height: root.rays.north + root.rays.south + 1px;
+        background: Theme.accent;
+    }
+    Rectangle {
+        x: root.cx - root.rays.west;
+        y: root.cy;
+        width: root.rays.west + root.rays.east + 1px;
+        height: 1px;
+        background: Theme.accent;
+    }
+
+    // End caps.
+    Rectangle {
+        x: root.cx - root.cap;
+        y: root.cy - root.rays.north;
+        width: 2 * root.cap + 1px;
+        height: 1px;
+        background: Theme.accent;
+    }
+    Rectangle {
+        x: root.cx - root.cap;
+        y: root.cy + root.rays.south;
+        width: 2 * root.cap + 1px;
+        height: 1px;
+        background: Theme.accent;
+    }
+    Rectangle {
+        x: root.cx - root.rays.west;
+        y: root.cy - root.cap;
+        width: 1px;
+        height: 2 * root.cap + 1px;
+        background: Theme.accent;
+    }
+    Rectangle {
+        x: root.cx + root.rays.east;
+        y: root.cy - root.cap;
+        width: 1px;
+        height: 2 * root.cap + 1px;
+        background: Theme.accent;
+    }
+}
+
+// A 1 px accent outline. `animated` eases it between positions (a new
+// container, a selection tightening) instead of jumping; while the user is
+// dragging it must follow the pointer exactly, so it is off then.
+component Outline inherits Rectangle {
+    in property <bool> animated;
+
+    border-width: 1px;
+    border-color: Theme.accent;
+
+    animate x, y, width, height {
+        duration: root.animated ? 110ms : 0ms;
+        easing: ease-out;
+    }
+}
+
+// Where a point placed now would land, in the snapping modes: a white
+// cross that turns accent, grows and gains a ring once pulled onto an edge.
+component SnapMarker {
+    in property <length> cx;
+    in property <length> cy;
+    in property <bool> snapped;
+
+    property <length> arm: root.snapped ? 6px : 5px;
+    property <color> ink: root.snapped ? Theme.accent : Theme.text;
+
+    Rectangle {
+        x: root.cx - root.arm;
+        y: root.cy;
+        width: 2 * root.arm + 1px;
+        height: 1px;
+        background: root.ink;
+    }
+    Rectangle {
+        x: root.cx;
+        y: root.cy - root.arm;
+        width: 1px;
+        height: 2 * root.arm + 1px;
+        background: root.ink;
+    }
+    if root.snapped: Rectangle {
+        x: root.cx - 3px;
+        y: root.cy - 3px;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
+        border-width: 1px;
+        border-color: Theme.accent;
+    }
+}
+
+// A message near the bottom of the screen, centred horizontally: with no
+// `x` set, Slint centres an element in its parent.
+component Hint inherits Rectangle {
+    in property <string> text;
+
+    visible: root.text != "";
+    width: label.preferred-width + 36px;
+    height: label.preferred-height + 20px;
+    background: Theme.panel;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.accent;
+
+    label := Text {
+        text: root.text;
+        color: Theme.text;
+        font-size: Theme.chip-font-size;
+    }
+}
+
+// The sampled pixel, and the averaging disc when a radius is set.
+component ColorMarker {
+    in property <length> cx;
+    in property <length> cy;
+    in property <length> radius;
+
+    // The averaging disc: a translucent fill with a ring at its edge.
+    if root.radius > 0: Rectangle {
+        x: root.cx - root.radius;
+        y: root.cy - root.radius;
+        width: 2 * root.radius + 1px;
+        height: 2 * root.radius + 1px;
+        border-radius: root.radius + 0.5px;
+        background: Theme.accent.with-alpha(0.22);
+        border-width: 1px;
+        border-color: Theme.accent;
+    }
+
+    // With no radius, four gapped arms point at the pixel without hiding it.
+    if root.radius <= 0: Rectangle {
+        x: root.cx - 5px;
+        y: root.cy;
+        width: 3px;
+        height: 1px;
+        background: Theme.accent;
+    }
+    if root.radius <= 0: Rectangle {
+        x: root.cx + 3px;
+        y: root.cy;
+        width: 3px;
+        height: 1px;
+        background: Theme.accent;
+    }
+    if root.radius <= 0: Rectangle {
+        x: root.cx;
+        y: root.cy - 5px;
+        width: 1px;
+        height: 3px;
+        background: Theme.accent;
+    }
+    if root.radius <= 0: Rectangle {
+        x: root.cx;
+        y: root.cy + 3px;
+        width: 1px;
+        height: 3px;
+        background: Theme.accent;
+    }
+
+    // The sampled pixel itself.
+    Rectangle {
+        x: root.cx - 1px;
+        y: root.cy - 1px;
+        width: 3px;
+        height: 3px;
+        border-width: 1px;
+        border-color: Theme.accent;
+    }
+}
+
+// Swatch plus the colour in hex, rgb() and hsl(), beside the cursor.
+component ColorBubble inherits Rectangle {
+    in property <color> swatch;
+    in property <string> text;
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    in property <length> canvas-width;
+    in property <length> canvas-height;
+
+    property <length> margin: 2px;
+    property <length> offset-x: 22px;
+    property <length> offset-y: 10px;
+    property <length> flipped-x: root.anchor-x + root.offset-x + root.width + root.margin > root.canvas-width
+        ? max(root.margin, root.anchor-x - root.offset-x - root.width) : root.anchor-x + root.offset-x;
+    property <length> flipped-y: root.anchor-y + root.offset-y + root.height + root.margin > root.canvas-height
+        ? max(root.margin, root.anchor-y - root.offset-y - root.height) : root.anchor-y + root.offset-y;
+
+    x: max(root.margin, min(root.flipped-x, root.canvas-width - root.width - root.margin));
+    y: max(root.margin, min(root.flipped-y, root.canvas-height - root.height - root.margin));
+    width: row.preferred-width + 18px;
+    height: row.preferred-height + 12px;
+    background: Theme.panel;
+    border-radius: Theme.radius;
+    drop-shadow-offset-x: 2px;
+    drop-shadow-offset-y: 2px;
+    drop-shadow-color: Theme.shadow;
+
+    row := HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 10px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                background: root.swatch;
+                border-width: 1px;
+                border-color: Theme.text;
+            }
+        }
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-family: Theme.mono;
+            font-size: Theme.chip-font-size;
+        }
+    }
+}
+
+// A dashed axis-aligned segment from `from` to `to` along one axis, drawn as
+// short dashes since Slint paths have no dash pattern.
+component Dashes {
+    in property <bool> horizontal;
+    // Fixed coordinate across the segment, and its two ends along it.
+    in property <length> at;
+    in property <length> from;
+    in property <length> to;
+
+    property <length> dash: 4px;
+    property <length> gap: 4px;
+    property <length> start: min(root.from, root.to);
+    property <length> span: abs(root.to - root.from);
+
+    for i in floor(root.span / (root.dash + root.gap)) + 1: Rectangle {
+        x: root.horizontal ? root.start + i * (root.dash + root.gap) : root.at;
+        y: root.horizontal ? root.at : root.start + i * (root.dash + root.gap);
+        width: root.horizontal ? min(root.dash, root.span - i * (root.dash + root.gap)) : 1px;
+        height: root.horizontal ? 1px : min(root.dash, root.span - i * (root.dash + root.gap));
+        background: Theme.accent.with-alpha(0.7);
+    }
+}
+
+// Point A to point B: the line, its endpoints, and, when the line is
+// meaningfully diagonal, the dashed right-angle legs with their lengths.
+component Distance {
+    in property <length> ax;
+    in property <length> ay;
+    in property <length> bx;
+    in property <length> by;
+    in property <bool> show-legs;
+
+    if root.show-legs: Dashes {
+        width: 100%;
+        height: 100%;
+        horizontal: true;
+        at: root.ay;
+        from: root.ax;
+        to: root.bx;
+    }
+    if root.show-legs: Dashes {
+        width: 100%;
+        height: 100%;
+        horizontal: false;
+        at: root.bx;
+        from: root.ay;
+        to: root.by;
+    }
+
+    Path {
+        width: 100%;
+        height: 100%;
+        // Path coordinates in the element's own logical px.
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: Theme.accent;
+        stroke-width: 2px;
+
+        MoveTo {
+            x: root.ax / 1px;
+            y: root.ay / 1px;
+        }
+        LineTo {
+            x: root.bx / 1px;
+            y: root.by / 1px;
+        }
+    }
+
+    for point in [{ x: root.ax, y: root.ay }, { x: root.bx, y: root.by }]: Rectangle {
+        x: point.x - 2.5px;
+        y: point.y - 2.5px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: Theme.accent;
+    }
+}
+
+export component Overlay inherits Window {
+    in property <image> backdrop;
+    // The edge map, white on transparent, and how visible it is (0 = off).
+    in property <image> edges;
+    in property <float> edges-opacity;
+
+    // Live marks, only set on the window the pointer is over.
+    in property <bool> show-crosshair;
+    in property <length> cursor-x;
+    in property <length> cursor-y;
+    in property <Rays> rays;
+
+    in property <bool> show-rect;
+    in property <bool> rect-animated;
+    in property <length> rect-x;
+    in property <length> rect-y;
+    in property <length> rect-width;
+    in property <length> rect-height;
+
+    // The placement marker in the snapping modes, and whether it snapped.
+    in property <bool> show-snap;
+    in property <bool> snap-snapped;
+    in property <length> snap-x;
+    in property <length> snap-y;
+
+    in property <bool> show-color;
+    in property <length> color-x;
+    in property <length> color-y;
+    in property <length> color-radius;
+    in property <color> color-swatch;
+    in property <string> color-text;
+
+    in property <bool> show-distance;
+    in property <length> distance-ax;
+    in property <length> distance-ay;
+    in property <length> distance-bx;
+    in property <length> distance-by;
+    in property <bool> distance-legs;
+    // Leg lengths, shown only with the legs.
+    in property <string> distance-dx;
+    in property <string> distance-dy;
+
+    // The main chip, anchored at (chip-x, chip-y) plus its offset.
+    in property <string> chip-text;
+    in property <length> chip-x;
+    in property <length> chip-y;
+    in property <length> chip-offset-x: 14px;
+    in property <length> chip-offset-y: 4px;
+    in property <string> hint-text;
+
+    // Chrome, only on the monitor the pointer is on.
+    in property <bool> show-chrome;
+    in property <int> mode;
+    in property <[string]> mode-tooltips;
+    in property <[Dial]> dials;
+    in property <[string]> help-lines;
+    in property <float> help-opacity;
+    in property <bool> help-visible;
+    callback mode-clicked(int);
+    callback dial-changed(int, float);
+    callback help-clicked();
+    callback help-hovered();
+
+    callback pointer-moved(length, length);
+    callback pointer-pressed(length, length);
+    callback pointer-released(length, length);
+    callback pointer-left();
+    callback wheel(length);
+    // Key text as Slint reports it, plus the modifiers that matter.
+    callback key(string, bool, bool) -> bool;
+
+    no-frame: true;
+    forward-focus: keys;
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.shift)
+                ? accept : reject
+        }
+
+        canvas := TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.move) {
+                    root.pointer-moved(self.mouse-x, self.mouse-y);
+                } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    root.pointer-pressed(self.mouse-x, self.mouse-y);
+                } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                    root.pointer-released(self.mouse-x, self.mouse-y);
+                }
+            }
+            changed has-hover => {
+                if (!self.has-hover) {
+                    root.pointer-left();
+                }
+            }
+            scroll-event(event) => {
+                root.wheel(event.delta-y);
+                accept
+            }
+
+            Image {
+                source: root.backdrop;
+                width: 100%;
+                height: 100%;
+                image-fit: fill;
+            }
+
+            Image {
+                source: root.edges;
+                width: 100%;
+                height: 100%;
+                image-fit: fill;
+                image-rendering: pixelated;
+                opacity: root.edges-opacity;
+                visible: root.edges-opacity > 0;
+            }
+
+            // Sized to the window: a zero-size element would have its
+            // children culled from redraws.
+            if root.show-crosshair: Crosshair {
+                width: 100%;
+                height: 100%;
+                cx: root.cursor-x;
+                cy: root.cursor-y;
+                rays: root.rays;
+            }
+
+            Outline {
+                visible: root.show-rect;
+                animated: root.rect-animated;
+                x: root.rect-x;
+                y: root.rect-y;
+                width: root.rect-width;
+                height: root.rect-height;
+            }
+
+            if root.show-snap: SnapMarker {
+                width: 100%;
+                height: 100%;
+                cx: root.snap-x;
+                cy: root.snap-y;
+                snapped: root.snap-snapped;
+            }
+
+            if root.show-color: ColorMarker {
+                width: 100%;
+                height: 100%;
+                cx: root.color-x;
+                cy: root.color-y;
+                radius: root.color-radius;
+            }
+
+            if root.show-distance: Distance {
+                width: 100%;
+                height: 100%;
+                ax: root.distance-ax;
+                ay: root.distance-ay;
+                bx: root.distance-bx;
+                by: root.distance-by;
+                show-legs: root.distance-legs;
+            }
+
+            // Leg chips: Δx under (or over) the horizontal leg, Δy beside the
+            // vertical one, both on the outside of the right angle.
+            if root.show-distance && root.distance-legs: Chip {
+                text: root.distance-dx;
+                anchor-x: (root.distance-ax + root.distance-bx) / 2;
+                anchor-y: root.distance-ay;
+                offset-x: 0;
+                offset-y: root.distance-by >= root.distance-ay ? 8px : -28px;
+                canvas-width: root.width;
+                canvas-height: root.height;
+            }
+            if root.show-distance && root.distance-legs: Chip {
+                text: root.distance-dy;
+                anchor-x: root.distance-bx;
+                anchor-y: (root.distance-ay + root.distance-by) / 2;
+                offset-x: root.distance-bx >= root.distance-ax ? 10px : -10px;
+                offset-y: root.distance-by >= root.distance-ay ? 0 : -20px;
+                canvas-width: root.width;
+                canvas-height: root.height;
+            }
+
+            Chip {
+                text: root.chip-text;
+                anchor-x: root.chip-x;
+                anchor-y: root.chip-y;
+                offset-x: root.chip-offset-x;
+                offset-y: root.chip-offset-y;
+                canvas-width: root.width;
+                canvas-height: root.height;
+            }
+
+            if root.show-color: ColorBubble {
+                swatch: root.color-swatch;
+                text: root.color-text;
+                anchor-x: root.color-x;
+                anchor-y: root.color-y;
+                canvas-width: root.width;
+                canvas-height: root.height;
+            }
+
+            Hint {
+                text: root.hint-text;
+                y: root.height - self.height - 48px;
+            }
+
+            panel := Panel {
+                visible: root.show-chrome;
+                x: (root.width - self.width) / 2;
+                y: 14px;
+                mode: root.mode;
+                mode-tooltips: root.mode-tooltips;
+                dials: root.dials;
+                mode-clicked(index) => { root.mode-clicked(index); }
+                dial-changed(index, value) => { root.dial-changed(index, value); }
+                help-visible: root.help-visible;
+                help-clicked => { root.help-clicked(); }
+            }
+
+            Help {
+                visible: root.show-chrome && root.help-opacity > 0.01;
+                opacity: root.help-opacity;
+                x: panel.x;
+                y: panel.y + panel.height + 10px;
+                lines: root.help-lines;
+                pointer-inside: canvas.has-hover
+                    && canvas.mouse-x >= self.x && canvas.mouse-x < self.x + self.width
+                    && canvas.mouse-y >= self.y && canvas.mouse-y < self.y + self.height;
+                hovered => { root.help-hovered(); }
+            }
+        }
+    }
+}

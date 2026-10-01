@@ -3972,6 +3972,7 @@ dependencies = [
 name = "ruler-app"
 version = "0.1.0"
 dependencies = [
+ "image",
  "ruler-core",
  "slint",
 ]
@@ -4265,6 +4266,7 @@ dependencies = [
  "const-field-offset",
  "i-slint-backend-linuxkms",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",

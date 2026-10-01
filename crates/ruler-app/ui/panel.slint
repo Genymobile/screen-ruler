@@ -1,0 +1,265 @@
+// The controls panel and the shortcut help, drawn on the monitor under the
+// pointer. The panel swallows clicks so they do not reach the measurement
+// underneath; the help never takes input.
+
+import { Theme } from "theme.slint";
+
+// One dial of the current mode, as the Rust side reports it.
+export struct Dial {
+    title: string,
+    value: float,
+    max: float,
+    // What the value means, e.g. "12 px" or "85  ·  4812 edges".
+    readout: string,
+}
+
+// Stroke paths for the mode icons, in a 30×30 box, in `Mode::ALL` order.
+// Dashed strokes are spelled out as segments: Slint paths cannot dash.
+component ModeIcon inherits Path {
+    in property <int> mode;
+
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: 30;
+    viewbox-height: 30;
+    stroke-width: 1.5px;
+    commands: [
+        // Crosshair: a cross with end caps.
+        "M15 6 L15 24 M6 15 L24 15 M12 6 L18 6 M12 24 L18 24 M6 12 L6 18 M24 12 L24 18",
+        // Drag rectangle: a dashed rectangle.
+        "M6 6 L9 6 M11.5 6 L14.5 6 M17 6 L20 6 M22 6 L24 6 L24 8 M24 10.5 L24 13.5 M24 16 L24 19 M24 21.5 L24 24 L22 24 M20 24 L17 24 M14.5 24 L11.5 24 M9 24 L6 24 L6 22 M6 19.5 L6 16.5 M6 14 L6 11 M6 8.5 L6 6",
+        // Container: nested rectangles.
+        "M5 5 L25 5 L25 25 L5 25 Z M9 9 L21 9 L21 21 L9 21 Z",
+        // Shrink-to-fit: a rectangle, a smaller one, and inward arrows.
+        "M5 5 L25 5 L25 25 L5 25 Z M11 11 L19 11 L19 19 L11 19 Z M7 7 L10 10 M23 7 L20 10 M7 23 L10 20 M23 23 L20 20",
+        // Color picker: a pipette.
+        "M8 22 L17 13 M15 11 L19 15 M18 12 L22 8 M21 7 L23 9 M8 22 L7 23",
+        // Point distance: a dashed right angle and its diagonal.
+        "M8 10 L11 10 M13.5 10 L16.5 10 M19 10 L22 10 L22 12 M22 14.5 L22 17.5 M22 20 L22 24 M8 10 L22 24",
+    ][root.mode];
+}
+
+component ModeButton inherits Rectangle {
+    // A mode icon, or -1 to show `glyph` instead.
+    in property <int> mode;
+    in property <string> glyph;
+    in property <bool> active;
+    in property <string> tooltip;
+    callback clicked();
+
+    width: 30px;
+    height: 30px;
+    border-radius: 4px;
+    border-width: 1px;
+    background: root.active ? Theme.accent.with-alpha(0.18)
+        : touch.pressed ? #2E333DF2 : touch.has-hover ? #575E6BD9 : #42474FB3;
+    border-color: root.active || touch.pressed ? Theme.accent
+        : touch.has-hover ? #B3BDC7E6 : #858F9C80;
+
+    if root.mode >= 0: ModeIcon {
+        mode: root.mode;
+        stroke: root.active || touch.pressed ? Theme.accent : Theme.text;
+    }
+    if root.mode < 0: Text {
+        text: root.glyph;
+        color: root.active || touch.pressed ? Theme.accent : Theme.text;
+        font-size: 15px;
+        font-weight: 700;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    // Slint's own tooltip: an input-transparent popup above everything,
+    // shown after a short hover. Custom content keeps it in our style rather
+    // than the platform widget style's.
+    Tooltip {
+        Rectangle {
+            background: #0D0D0D;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: #858F9C;
+
+            HorizontalLayout {
+                padding-left: 7px;
+                padding-right: 7px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+
+                Text {
+                    text: root.tooltip;
+                    color: Theme.text;
+                    font-size: 12px;
+                }
+            }
+        }
+    }
+}
+
+// A plain slider: a track with a trailing fill and a handle.
+component Slider {
+    in property <float> value;
+    in property <float> maximum;
+    callback changed(float);
+
+    height: 18px;
+
+    property <float> fraction: root.maximum > 0 ? max(0, min(1, root.value / root.maximum)) : 0;
+
+    Rectangle {
+        y: (root.height - self.height) / 2;
+        height: 4px;
+        border-radius: 2px;
+        background: #FFFFFF33;
+    }
+    Rectangle {
+        x: 0;
+        y: (root.height - self.height) / 2;
+        width: root.fraction * root.width;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+    Rectangle {
+        x: root.fraction * (root.width - self.width);
+        width: 12px;
+        height: 12px;
+        y: (root.height - self.height) / 2;
+        border-radius: 6px;
+        background: Theme.text;
+    }
+
+    touch := TouchArea {
+        function set(x: length) {
+            root.changed(max(0, min(1, x / root.width)) * root.maximum);
+        }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                self.set(self.mouse-x);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                self.set(self.mouse-x);
+            }
+        }
+    }
+}
+
+export component Panel inherits Rectangle {
+    in property <int> mode;
+    in property <[string]> mode-tooltips;
+    in property <[Dial]> dials;
+    in property <bool> help-visible;
+    callback mode-clicked(int);
+    callback dial-changed(int, float);
+    callback help-clicked();
+
+    width: 408px;
+    height: layout.preferred-height;
+    background: Theme.panel;
+    border-radius: Theme.radius;
+
+    // Behind the controls: swallows clicks on the panel background.
+    TouchArea { }
+
+    layout := VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            for tooltip[index] in root.mode-tooltips: ModeButton {
+                mode: index;
+                active: index == root.mode;
+                tooltip: tooltip;
+                clicked => { root.mode-clicked(index); }
+            }
+
+            // Set apart from the modes: it toggles the help, not a tool.
+            Rectangle { width: 8px; }
+            ModeButton {
+                mode: -1;
+                glyph: "?";
+                active: root.help-visible;
+                tooltip: "Shortcut help  (?)";
+                clicked => { root.help-clicked(); }
+            }
+        }
+
+        for dial[index] in root.dials: HorizontalLayout {
+            spacing: 8px;
+            Text {
+                width: 104px;
+                text: dial.title;
+                color: Theme.text;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+            Slider {
+                horizontal-stretch: 1;
+                value: dial.value;
+                maximum: dial.max;
+                changed(value) => { root.dial-changed(index, value); }
+            }
+            Text {
+                min-width: 110px;
+                text: dial.readout;
+                color: Theme.text;
+                font-size: 13px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// The shortcut list. Hovering it asks for it to go away, so it never
+// stands between the pointer and what is being measured.
+//
+// It has no TouchArea of its own: one would take presses, and the layer
+// underneath would miss both those and the moves onto the card, so a drag
+// begun on it would start from a stale point. The overlay reports from its
+// own pointer position whether the pointer is over the card instead.
+export component Help inherits Rectangle {
+    in property <[string]> lines;
+    in property <bool> pointer-inside;
+    callback hovered();
+
+    changed pointer-inside => {
+        if (self.pointer-inside) {
+            root.hovered();
+        }
+    }
+
+    width: 408px;
+    height: list.preferred-height;
+    background: Theme.panel;
+    border-radius: Theme.radius;
+
+    list := VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 4px;
+
+        Text {
+            text: "Shortcuts";
+            color: Theme.text;
+            font-size: 14px;
+            font-weight: 700;
+        }
+        for line in root.lines: Text {
+            text: line;
+            color: Theme.text;
+            font-size: 13px;
+            wrap: word-wrap;
+        }
+    }
+}

@@ -178,6 +178,12 @@ macro_rules! modes {
 // Every snapping mode lists SnapDistance first — the dial the wheel drives, and
 // the one being adjusted most often while placing geometry — then Sensitivity,
 // because a snap radius is useless over an edge map too coarse to find the edge.
+//
+// Shrink-to-fit deliberately does not snap: the shrink itself finds the content
+// edges, so the drag only has to enclose the content roughly, and a corner
+// pulled onto an edge inside it would start the shrink from a rect that already
+// cuts into what it should keep. Its dial is the sensitivity, which is what
+// decides what the shrink finds.
 modes! {
     /// Cast rays outward from the cursor to the nearest edges.
     Crosshair   => controls [Sensitivity], rect false,
@@ -195,7 +201,7 @@ modes! {
                    hint "Detect the enclosing UI container";
 
     /// Drag a rectangle, then tighten it onto the content it encloses.
-    ShrinkToFit => controls [SnapDistance, Sensitivity], rect true,
+    ShrinkToFit => controls [Sensitivity], rect true,
                    label "Shrink-to-fit", export "Rectangle",
                    hint "Drag, then tighten onto the content inside";
 
@@ -225,6 +231,13 @@ impl Mode {
     /// tune it, or offering a snap radius that never applies.
     pub fn snaps(self) -> bool {
         self.controls().contains(&Control::SnapDistance)
+    }
+
+    /// True for the modes that have nothing to show until the edge map is
+    /// ready. The others work without it: the colour picker reads the
+    /// screenshot, and dragging or placing points just does not snap yet.
+    pub fn needs_edges(self) -> bool {
+        matches!(self, Mode::Crosshair | Mode::Container)
     }
 }
 
@@ -315,6 +328,13 @@ pub fn format_distance(value: f32) -> String {
 
 /// Formats the full A-to-B summary, adding a per-axis breakdown only when the
 /// line is meaningfully diagonal.
+/// Whether a distance is diagonal enough to be worth breaking down into
+/// Δx and Δy. Judged on the rounded deltas, the ones the breakdown prints, so
+/// the overlay's legs and the copied summary always agree.
+pub fn shows_delta_breakdown(dx: f32, dy: f32) -> bool {
+    dx.abs().round().min(dy.abs().round()) > DELTA_BREAKDOWN_THRESHOLD
+}
+
 pub fn format_distance_summary(ax: f32, ay: f32, bx: f32, by: f32) -> String {
     let dx = bx - ax;
     let dy = by - ay;
@@ -327,7 +347,7 @@ pub fn format_distance_summary(ax: f32, ay: f32, bx: f32, by: f32) -> String {
         by.round(),
         format_distance(distance)
     );
-    if dx.abs().round().min(dy.abs().round()) > DELTA_BREAKDOWN_THRESHOLD {
+    if shows_delta_breakdown(dx, dy) {
         summary.push_str(&format!(
             " (\u{0394}x={}, \u{0394}y={})",
             dx.abs().round(),
@@ -966,11 +986,11 @@ mod tests {
     }
 
     #[test]
-    fn shrink_to_fit_snaps_like_the_dial_it_offers() {
-        // Regression: it showed a snap-distance slider, but snapping was never
-        // applied in that mode, so the control was inert.
-        assert!(Mode::ShrinkToFit.snaps());
-        assert_eq!(Mode::ShrinkToFit.primary_control(), Control::SnapDistance);
+    fn shrink_to_fit_leaves_the_edges_to_the_shrink() {
+        // The shrink finds the content edges itself; snapping the drag corners
+        // could only pull them inside the content first.
+        assert!(!Mode::ShrinkToFit.snaps());
+        assert_eq!(Mode::ShrinkToFit.primary_control(), Control::Sensitivity);
     }
 
     #[test]
@@ -1006,7 +1026,7 @@ mod tests {
             (Mode::Crosshair, 40.0),
             (Mode::RectDrag, 12.0),
             (Mode::Container, 40.0),
-            (Mode::ShrinkToFit, 12.0),
+            (Mode::ShrinkToFit, 40.0),
             (Mode::ColorPicker, 6.0),
             (Mode::Distance, 12.0),
         ] {
@@ -1058,6 +1078,15 @@ mod tests {
         assert_eq!(format_distance(10.0), "10 px");
         assert_eq!(format_distance(10.25), "10.3 px");
         assert_eq!(format_distance(10.04), "10 px");
+    }
+
+    #[test]
+    fn the_breakdown_is_judged_on_the_deltas_it_prints() {
+        // 8.1 prints as 8, which is not past the threshold.
+        assert!(!shows_delta_breakdown(8.1, 20.0));
+        assert!(!format_distance_summary(0.0, 0.0, 8.1, 20.0).contains('\u{0394}'));
+        assert!(shows_delta_breakdown(-8.6, 20.0));
+        assert!(format_distance_summary(0.0, 0.0, -8.6, 20.0).contains("\u{0394}x=9"));
     }
 
     #[test]
