@@ -2,9 +2,10 @@
 # install-linux.sh — Install screen-ruler binary, desktop entry, and keyboard shortcut.
 #
 # Usage:
-#   ./install-linux.sh [-d INSTALL_DIR]
+#   ./install-linux.sh [-d INSTALL_DIR] [-b BINARY]
 #
-# The script expects a built binary at dist/screen-ruler (run pyinstaller first).
+# The binary is taken from next to this script (as in a release archive), else
+# from target/release/screen-ruler (after `cargo build --release`), or from -b.
 # It copies the binary into INSTALL_DIR (default: current directory), installs a
 # .desktop file, and registers a global Super+Shift+R shortcut for the detected
 # desktop environment (GNOME, KDE Plasma, Hyprland, Sway).
@@ -13,21 +14,25 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$PWD"
+BINARY=""
 APP_NAME="Screen Ruler"
 APP_ID="screen-ruler"
 SHORTCUT_DISPLAY="Super+Shift+R"
 
 usage() {
-    echo "Usage: $0 [-d INSTALL_DIR]"
+    echo "Usage: $0 [-d INSTALL_DIR] [-b BINARY]"
     echo
     echo "  -d DIR   Install the binary into DIR (default: current directory)"
+    echo "  -b FILE  Install FILE (default: the screen-ruler binary next to this"
+    echo "           script, else target/release/screen-ruler)"
     echo "  -h       Show this help"
     exit 0
 }
 
-while getopts "d:h" opt; do
+while getopts "d:b:h" opt; do
     case "$opt" in
         d) INSTALL_DIR="$OPTARG" ;;
+        b) BINARY="$OPTARG" ;;
         h) usage ;;
         *) usage ;;
     esac
@@ -35,10 +40,14 @@ done
 
 # --- Locate the built binary ------------------------------------------------
 
-BINARY="$SCRIPT_DIR/dist/screen-ruler"
-if [[ ! -f "$BINARY" ]]; then
-    echo "Error: $BINARY not found."
-    echo "Build it first:  pyinstaller screen_ruler.spec"
+if [[ -z "$BINARY" ]]; then
+    for candidate in "$SCRIPT_DIR/screen-ruler" "$SCRIPT_DIR/target/release/screen-ruler"; do
+        if [[ -f "$candidate" ]]; then BINARY="$candidate"; break; fi
+    done
+fi
+if [[ -z "$BINARY" || ! -f "$BINARY" ]]; then
+    echo "Error: screen-ruler binary not found${BINARY:+ at $BINARY}."
+    echo "Build it first:  cargo build --release   (or pass -b /path/to/screen-ruler)"
     exit 1
 fi
 
@@ -329,7 +338,7 @@ if [[ "$shortcut_ok" == false ]]; then
     echo
     echo "Could not register shortcut automatically for this desktop environment."
     echo "Bind '$EXEC_PATH' to your preferred shortcut manually."
-    echo "See docs/manual-shortcut-setup.md for detailed instructions."
+    echo "See https://github.com/Genymobile/screen-ruler/blob/main/docs/manual-shortcut-setup.md"
 else
     echo
     echo "Done. Press $SHORTCUT_DISPLAY to launch $APP_NAME."

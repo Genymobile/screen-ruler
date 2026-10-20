@@ -73,7 +73,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir "$ARCHIVE"
-          cp target/release/screen-ruler LICENSE README.md "$ARCHIVE"/
+          cp target/release/screen-ruler install-linux.sh LICENSE README.md "$ARCHIVE"/
           tar -czf "$ARCHIVE.tar.gz" "$ARCHIVE"
           echo "ASSET=$ARCHIVE.tar.gz" >> "$GITHUB_ENV"
 
@@ -82,7 +82,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory $env:ARCHIVE | Out-Null
-          Copy-Item target/release/screen-ruler.exe, LICENSE, README.md $env:ARCHIVE
+          Copy-Item target/release/screen-ruler.exe, install-windows.ps1, LICENSE, README.md $env:ARCHIVE
           Compress-Archive -Path $env:ARCHIVE -DestinationPath "$env:ARCHIVE.zip"
           "ASSET=$env:ARCHIVE.zip" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 

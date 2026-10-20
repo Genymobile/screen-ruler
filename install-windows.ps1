@@ -3,12 +3,17 @@
     Install screen-ruler and register a global keyboard shortcut on Windows.
 
 .DESCRIPTION
-    Copies the built screen-ruler.exe binary to an install directory (default:
-    current directory), creates a Start Menu shortcut with a Ctrl+Shift+R
+    Copies screen-ruler.exe to an install directory (default: current
+    directory), creates a Start Menu shortcut with a Ctrl+Shift+R
     hotkey, and adds the binary to the user PATH.
 
 .PARAMETER InstallDir
     Directory to install the binary into (default: current directory).
+
+.PARAMETER Binary
+    The executable to install (default: screen-ruler.exe next to this script,
+    as in a release archive, else target\release\screen-ruler.exe after
+    `cargo build --release`).
 
 .EXAMPLE
     .\install-windows.ps1
@@ -16,7 +21,8 @@
 #>
 
 param(
-    [string]$InstallDir = (Get-Location).Path
+    [string]$InstallDir = (Get-Location).Path,
+    [string]$Binary
 )
 
 Set-StrictMode -Version Latest
@@ -24,12 +30,17 @@ $ErrorActionPreference = 'Stop'
 
 $AppName = 'Screen Ruler'
 $AppId   = 'screen-ruler'
-$Binary  = Join-Path $PSScriptRoot 'dist' 'screen-ruler.exe'
 
 # --- Locate the built binary ------------------------------------------------
 
-if (-not (Test-Path $Binary)) {
-    Write-Error "Binary not found at $Binary.`nBuild it first:  pyinstaller screen_ruler.spec" -ErrorAction Continue
+if (-not $Binary) {
+    $Binary = @(
+        (Join-Path $PSScriptRoot 'screen-ruler.exe'),
+        (Join-Path $PSScriptRoot 'target\release\screen-ruler.exe')
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if (-not $Binary -or -not (Test-Path $Binary)) {
+    Write-Error "screen-ruler.exe not found.`nBuild it first:  cargo build --release   (or pass -Binary C:\path\to\screen-ruler.exe)" -ErrorAction Continue
     exit 1
 }
 
