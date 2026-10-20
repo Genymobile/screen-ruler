@@ -91,12 +91,10 @@ MODES (press 1-{last})
 {modes}
 
 KEYS
-    Tab            Toggle session mode (persistent annotations)
-    Click          Copy the measurement and quit / place an annotation
+    Click          Copy the measurement and quit (point distance: place A, then B)
+    Drag           Select a rectangle (modes 2 and 4), then click or Enter
     Enter          Copy the current selection and quit
-    Ctrl+C         Copy the measurement / export annotations as Markdown
-    Ctrl+Z         Undo annotation        Ctrl+Shift+Z  Redo annotation
-    Ctrl+Shift+C   Drag a region to copy it with annotations
+    Ctrl+C         Copy the measurement and quit
     Wheel          Adjust the active mode's control
     ? or H         Toggle the shortcut overlay
     Esc / Q        Quit
