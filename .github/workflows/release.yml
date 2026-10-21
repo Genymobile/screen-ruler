@@ -1,0 +1,93 @@
+# Builds release binaries for a `v*` tag and attaches them to a draft GitHub
+# release, to be reviewed and published by hand. macOS has no binary: it is
+# unsigned and untested, so the README has macOS users build from source.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          --repo "$GITHUB_REPOSITORY"
+          --draft --verify-tag
+          --title "screen-ruler $GITHUB_REF_NAME"
+          --notes "Release notes to be written."
+
+  build:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on the oldest supported Ubuntu: the binary needs the glibc
+          # it was built against or newer, so a build on a current distro
+          # would not start on Ubuntu 22.04 or 24.04.
+          - os: ubuntu-22.04
+            target: linux-x86_64
+          - os: windows-latest
+            target: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    env:
+      ARCHIVE: screen-ruler-${{ github.ref_name }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+
+      - name: Check the tag matches the crate version
+        shell: bash
+        run: |
+          # e.g. path+file:///…/crates/ruler-app#0.1.0
+          pkgid=$(cargo pkgid -p ruler-app)
+          version=${pkgid##*[#@]}
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match workspace version $version" >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: cargo test --workspace --release
+
+      - name: Build
+        run: cargo build --release -p ruler-app
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir "$ARCHIVE"
+          cp target/release/screen-ruler install-linux.sh LICENSE README.md "$ARCHIVE"/
+          tar -czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+          echo "ASSET=$ARCHIVE.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory $env:ARCHIVE | Out-Null
+          Copy-Item target/release/screen-ruler.exe, install-windows.ps1, LICENSE, README.md $env:ARCHIVE
+          Compress-Archive -Path $env:ARCHIVE -DestinationPath "$env:ARCHIVE.zip"
+          "ASSET=$env:ARCHIVE.zip" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Upload to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "$ASSET" --repo "$GITHUB_REPOSITORY"

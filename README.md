@@ -1,89 +1,86 @@
 # screen-ruler
 
-A smart, edge-detection-based screen ruler for Linux desktops.
+A smart, edge-detection-based screen ruler for Linux, Windows and macOS.
 
 Move your mouse cursor over any UI element and instantly read the **width** and **height** of the space between the nearest edges — buttons, panels, windows, icons — with no clicking or dragging required.
 
+> **v0.1 is a preview of the Rust rewrite.** It has every measurement tool, in quick mode: measure, copy, quit. Session mode (persistent annotations, undo/redo, Markdown export) and composite image export are not ported yet; they are planned for v0.2. Until then, the [Python version](#python-version) remains the full-featured option.
+
 ## How it works
 
-At launch, screen-ruler captures a one-time screenshot and builds a binary edge map using Canny edge detection (with an OpenCV Gaussian pre-blur to suppress font anti-aliasing and wallpaper noise). A transparent overlay is then shown over all monitors. Each frame, four rays are cast North / South / East / West from the mouse cursor until they hit an edge pixel or the screen boundary. The total East+West distance is reported as **W** and North+South as **H**, live in a small label next to the cursor.
+At launch, screen-ruler takes a one-time screenshot of every monitor and detects edges in it with a Canny edge detector that works on colour, so a step between two colours of equal brightness still counts. It then covers each monitor with a fullscreen overlay showing that screenshot. As the mouse moves, rays are cast North / South / East / West from the cursor until they hit an edge or the screen boundary, and the distances are shown next to the cursor as **W × H**.
 
-## Dependencies
+Measurements are in logical pixels (the units UI toolkits and CSS use) and land exactly on edge boundaries, including on mixed and fractional display scales.
 
-| Package | Minimum version |
+## Install
+
+Download the archive for your platform from the [releases page](https://github.com/Genymobile/screen-ruler/releases):
+
+| Platform | Archive |
 |---|---|
-| [PyQt6](https://pypi.org/project/PyQt6/) | 6.2 |
-| [NumPy](https://pypi.org/project/numpy/) | 1.21 |
-| [opencv-python-headless](https://pypi.org/project/opencv-python-headless/) | 4.5 |
+| Linux x86_64 (glibc 2.35+, e.g. Ubuntu 22.04 or later) | `screen-ruler-<version>-linux-x86_64.tar.gz` |
+| Windows x86_64 | `screen-ruler-<version>-windows-x86_64.zip` |
+| macOS | no binary yet: [build from source](#build-from-source) |
 
-Install all dependencies at once:
+Each archive contains the `screen-ruler` binary and an install script that copies it to a directory of your choice and sets up a [global keyboard shortcut](#global-keyboard-shortcut). The binary also runs as is, without installing.
+
+On Linux the only runtime dependency is fontconfig, which every desktop distribution ships.
+
+## Build from source
+
+Install [Rust](https://rustup.rs) (stable), then:
 
 ```bash
-pip install -r requirements.txt
+cargo build --release     # binary at target/release/screen-ruler
+cargo run --release       # or build and run in one step
 ```
+
+On Linux, building also needs the fontconfig headers (`libfontconfig1-dev` on Debian/Ubuntu, `fontconfig-devel` on Fedora).
+
+**macOS:** this is the only way to get screen-ruler on macOS for now. It builds, but hasn't been tested there yet; you will likely need to grant the Screen Recording permission (System Settings → Privacy & Security). Reports are welcome.
 
 ## Usage
 
 ```bash
-python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-overlay]
+screen-ruler [--sensitivity N] [--threshold-low N --threshold-high N] [--debug-edge-overlay]
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `--threshold-low N` | 29 | Lower hysteresis threshold for the Canny edge detector |
-| `--threshold-high N` | 101 | Upper hysteresis threshold for the Canny edge detector |
-| `--debug-edge-overlay` | off | Keep the captured Canny edge map visible (base opacity) for debugging; slider changes also trigger a transient edge preview |
+| `--sensitivity N` | 85 | Edge-detection sensitivity, 0–100. Higher finds more edges |
+| `--threshold-low N` | | Lower Canny threshold, 0–255. Overrides `--sensitivity` |
+| `--threshold-high N` | | Upper Canny threshold, 0–255. Overrides `--sensitivity` |
+| `--debug-edge-overlay` | off | Keep the detected edge map visible |
+| `-h`, `--help` / `-V`, `--version` | | Show the help / the version |
+
+**Modes** (press `1`–`6`, or use the controls panel)
+
+| Key | Mode | |
+|---|---|---|
+| `1` | Crosshair | Measure to the nearest edges around the cursor |
+| `2` | Drag rectangle | Drag a rectangle, snapping to edges |
+| `3` | Container detection | Detect the enclosing UI container |
+| `4` | Shrink-to-fit | Drag, then tighten onto the content inside |
+| `5` | Color picker | Sample a colour, optionally averaged |
+| `6` | Point distance | Measure between two points |
 
 **Controls**
 
 | Input | Action |
 |---|---|
-| `1` / `2` / `3` / `4` / `5` | Switch measurement mode |
-| `Tab` | Toggle session mode (persistent annotation workspace) |
-| `Ctrl+C` | Copy current measurement to clipboard, then quit (quick mode) |
-| `Enter` | Copy drag/shrink selection to clipboard, then quit (quick mode) |
-| `?` or `H` | Toggle the shortcut help overlay |
-| `Escape` | Exit session mode (or quit when not in session mode) |
-| `Q` | Quit |
-| Left click | Copy current measurement and quit (crosshair/container/color), or confirm drag/shrink selection |
-| Top `Sensitivity` slider | Recompute edge detection live (debounced) and show the edge-map preview briefly (hold then fade) |
-| Color mode `Average (px)` slider | Increase circular weighted sampling radius (0 = single pixel) |
-| Mouse wheel | Adjust active mode control (sensitivity / snap distance / color averaging) |
-
-**Session mode controls** *(active after pressing `Tab`)*
-
-| Input | Action |
-|---|---|
-| Left click | Place persistent annotation at cursor position |
-| `Ctrl+C` | Copy all annotations as a Markdown list |
-| `Ctrl+Z` or `Z` | Undo last annotation |
-| `Ctrl+Shift+Z` | Redo last undone annotation |
-| `Ctrl+Shift+C` | Enter composite export mode, then drag a region to copy a screenshot with annotations (works from any annotation mode) |
-
-Session mode also shows `MD` and `IMG` buttons next to the `SESSION` badge for these two export actions.
-
-On launch, a lightweight shortcut overlay is shown briefly and fades automatically; press `?` or `H` any time to bring it back.
-
-## Build a standalone executable
-
-If you don't want to install a Python environment, you can build a single self-contained binary with [PyInstaller](https://pyinstaller.org):
-
-```bash
-pip install -r requirements.txt -r requirements-build.txt
-pyinstaller screen_ruler.spec
-```
-
-The binary is written to `dist/screen-ruler`. Copy it anywhere and run it directly — no Python or library installation needed on the target machine.
-
-> **Note:** the executable bundles all dependencies and is therefore ~100 MB. This is expected for an application that ships PyQt6, NumPy, and OpenCV.
+| Left click | Copy the measurement to the clipboard and quit (point distance: place A, then B) |
+| Drag | Select a rectangle (modes 2 and 4), then click or press `Enter` |
+| `Enter` | Copy the current selection and quit |
+| `Ctrl+C` | Copy the measurement and quit |
+| Mouse wheel | Adjust the active mode's control (sensitivity, snap distance, colour averaging) |
+| `?` or `H` | Toggle the shortcut help |
+| `Esc` or `Q` | Quit |
 
 ## Global keyboard shortcut
 
-Screen Ruler is designed to be ephemeral — capture, measure, quit. A global keyboard shortcut lets you summon it instantly without a persistent daemon.
+Screen Ruler is designed to be ephemeral — capture, measure, quit. A global keyboard shortcut lets you summon it instantly without a persistent daemon. The install scripts take the binary next to them (as in a release archive), else `target/release/` (after `cargo build --release`), or the one given with `-b` / `-Binary`.
 
 ### Linux
-
-After building the binary, run the install script:
 
 ```bash
 ./install-linux.sh            # installs to the current directory
@@ -94,7 +91,7 @@ The script copies the binary, installs a `.desktop` entry, and automatically reg
 
 ### macOS
 
-After building the binary, run the install script:
+After [building from source](#build-from-source):
 
 ```bash
 ./install-macos.sh            # installs to the current directory
@@ -105,10 +102,10 @@ The script copies the binary and creates an Automator Quick Action ("Launch Scre
 
 ### Windows
 
-After building the executable, run the install script in PowerShell:
+In PowerShell:
 
 ```powershell
-.\install-windows.ps1                                          # installs to the current directory
+.\install-windows.ps1                                               # installs to the current directory
 .\install-windows.ps1 -InstallDir "$env:LOCALAPPDATA\screen-ruler"  # or specify a directory
 ```
 
@@ -118,35 +115,72 @@ The script copies the binary, adds it to the user `PATH`, and creates a Start Me
 
 For manual setup on any platform, see [docs/manual-shortcut-setup.md](docs/manual-shortcut-setup.md).
 
+## Known limitations
 
-## Troubleshooting
+- No session mode or image export yet (planned for v0.2).
+- On wlroots compositors (Sway, Hyprland), rotated or flipped monitors are captured unrotated. GNOME and Windows handle rotation.
+- Tested live on GNOME Wayland (mixed scales, several monitors) and Windows 11 (several monitors, one rotated). KDE, X11 and macOS haven't been tested yet.
 
-### X11 overlay offset under top/side bars
+## Python version
 
-On some X11 window managers, frameless utility windows are constrained to the desktop work area (excluding panels/docks). screen-ruler uses `Qt.X11BypassWindowManagerHint` on X11 so the overlay matches full virtual-desktop coordinates used for capture and measurement.
+The original implementation (`screen_ruler.py`, `ruler/`, `qml/`) uses PyQt6 and OpenCV. It is the full-featured option until v0.2, and will be retired once the Rust version has session mode and image export.
 
-Because bypass windows may have less predictable focus behavior, the app also installs an application-level `Escape`/`Q` key fallback.
+| Package | Minimum version |
+|---|---|
+| [PyQt6](https://pypi.org/project/PyQt6/) | 6.2 |
+| [NumPy](https://pypi.org/project/numpy/) | 1.21 |
+| [opencv-python-headless](https://pypi.org/project/opencv-python-headless/) | 4.5 |
 
-### `qt.qpa.theme.gnome: dbus reply error ... NoReply`
+```bash
+pip install -r requirements.txt
+python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-overlay]
+```
 
-On some GNOME/X11 systems Qt may print this warning during startup while probing desktop theme services over DBus. In most cases it is harmless and does not affect ruler behavior.
+It has the same modes and controls, plus session mode:
 
-If it appears repeatedly, check that your session DBus and portal services are healthy (`dbus-daemon`, `xdg-desktop-portal`).
+| Input | Action |
+|---|---|
+| `Tab` | Toggle session mode (persistent annotation workspace) |
+| Left click | Place a persistent annotation at the cursor position |
+| `Ctrl+C` | Copy all annotations as a Markdown list |
+| `Ctrl+Z` or `Z` | Undo last annotation |
+| `Ctrl+Shift+Z` | Redo last undone annotation |
+| `Ctrl+Shift+C` | Enter composite export mode, then drag a region to copy a screenshot with annotations |
+| `Escape` | Exit session mode (or quit when not in session mode) |
 
+Session mode also shows `MD` and `IMG` buttons next to the `SESSION` badge for the two export actions.
+
+To build a standalone ~100 MB executable with [PyInstaller](https://pyinstaller.org) and install it with a keyboard shortcut:
+
+```bash
+pip install -r requirements.txt -r requirements-build.txt
+pyinstaller screen_ruler.spec            # writes dist/screen-ruler
+./install-linux.sh -b dist/screen-ruler  # or install-macos.sh; on Windows: -Binary dist\screen-ruler.exe
+```
+
+**Troubleshooting**
+
+- *X11 overlay offset under top/side bars:* on some X11 window managers, frameless utility windows are constrained to the work area. The Python version uses `Qt.X11BypassWindowManagerHint` so the overlay matches the full virtual desktop, plus an application-level `Escape`/`Q` fallback, since bypass windows may have less predictable focus behaviour.
+- *`qt.qpa.theme.gnome: dbus reply error ... NoReply`:* Qt may print this at startup on some GNOME/X11 systems while probing theme services over DBus. It is usually harmless; if it repeats, check that `dbus-daemon` and `xdg-desktop-portal` are healthy.
 
 ## Contributing
 
-1. Install the dev dependencies (same as the runtime ones, plus `pytest`):
-   ```bash
-   pip install -r requirements-dev.txt
-   ```
-2. Run the test suite from the repository root:
-   ```bash
-   pytest tests/
-   ```
-3. The pure-logic helpers (`trace_ray`, `compute_edge_map`) are module-level functions specifically so they can be tested without a display. Keep new logic in the same style when possible.
-4. The QML overlay (`screen_ruler.qml`) and screen-capture code require a running Qt application and are not covered by the unit tests.
+The Rust workspace is in `crates/`: `ruler-core` holds everything that doesn't depend on the UI toolkit (capture, edge detection, measurement, colour, clipboard, interaction state), and `ruler-app` is the Slint UI.
+
+```bash
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+```
+
+CI runs the same checks on Linux, Windows and macOS for every pull request. To run them locally before each push, enable the pre-push hook, as described in [.githooks/pre-push](.githooks/pre-push).
+
+For the Python version: `pip install -r requirements-dev.txt`, then `pytest tests/`.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+screen-ruler is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+The UI is built with [Slint](https://slint.dev), used under the [Slint Royalty-free Desktop, Mobile and Web Applications License](https://github.com/slint-ui/slint/blob/master/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md).
+
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev)

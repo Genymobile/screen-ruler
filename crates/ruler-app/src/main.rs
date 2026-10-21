@@ -4,6 +4,10 @@
 //! overlay window showing its frozen screenshot, and hands them to [`app`],
 //! which draws the measurement on top.
 
+// On Windows, a GUI program: a console program launched from a shortcut opens
+// a console window, which lingers under the overlay and into the capture.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 slint::slint! {
     export { Dial, Overlay, Rays } from "ui/overlay.slint";
 }
@@ -26,6 +30,7 @@ use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
 use surface::Surface;
 
 fn main() -> ExitCode {
+    attach_parent_console();
     let options = match cli::parse(std::env::args().skip(1)) {
         Parsed::Run(options) => options,
         Parsed::Help => {
@@ -50,6 +55,28 @@ fn main() -> ExitCode {
         }
     }
 }
+
+/// Started from a terminal, a GUI program has no console of its own, so
+/// `--help`, `--version` and errors would print nowhere. Attach to the
+/// terminal's console when there is one; from a shortcut there is none and
+/// this does nothing. The terminal doesn't wait for a GUI program, so output
+/// can land after its next prompt.
+#[cfg(windows)]
+fn attach_parent_console() {
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AttachConsole(process_id: u32) -> i32;
+    }
+    // SAFETY: AttachConsole takes a plain integer and only fails, harmlessly,
+    // when there is no parent console or one is already attached.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}
 
 fn run(options: &Options) -> Result<(), String> {
     // Placement goes through winit, so make sure that is the backend in use.

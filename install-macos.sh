@@ -2,10 +2,10 @@
 # install-macos.sh — Install screen-ruler and create an Automator shortcut on macOS.
 #
 # Usage:
-#   ./install-macos.sh [-d INSTALL_DIR]
+#   ./install-macos.sh [-d INSTALL_DIR] [-b BINARY]
 #
-# The script expects a built binary at dist/screen-ruler (run pyinstaller first).
-# It copies the binary to INSTALL_DIR (default: current directory), creates an
+# The binary is taken from target/release/screen-ruler (after
+# `cargo build --release`), or from -b. It copies the binary to INSTALL_DIR (default: current directory), creates an
 # Automator Quick Action that launches it, and prints instructions for binding
 # a keyboard shortcut in System Settings.
 
@@ -13,21 +13,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$PWD"
+BINARY=""
 APP_ID="screen-ruler"
 SHORTCUT_DISPLAY="⌘⇧R (Cmd+Shift+R)"
 SERVICE_NAME="Launch Screen Ruler"
 
 usage() {
-    echo "Usage: $0 [-d INSTALL_DIR]"
+    echo "Usage: $0 [-d INSTALL_DIR] [-b BINARY]"
     echo
     echo "  -d DIR   Install the binary into DIR (default: current directory)"
+    echo "  -b FILE  Install FILE (default: target/release/screen-ruler)"
     echo "  -h       Show this help"
     exit 0
 }
 
-while getopts "d:h" opt; do
+while getopts "d:b:h" opt; do
     case "$opt" in
         d) INSTALL_DIR="$OPTARG" ;;
+        b) BINARY="$OPTARG" ;;
         h) usage ;;
         *) usage ;;
     esac
@@ -35,10 +38,14 @@ done
 
 # --- Locate the built binary ------------------------------------------------
 
-BINARY="$SCRIPT_DIR/dist/screen-ruler"
-if [[ ! -f "$BINARY" ]]; then
-    echo "Error: $BINARY not found."
-    echo "Build it first:  pyinstaller screen_ruler.spec"
+if [[ -z "$BINARY" ]]; then
+    for candidate in "$SCRIPT_DIR/target/release/screen-ruler"; do
+        if [[ -f "$candidate" ]]; then BINARY="$candidate"; break; fi
+    done
+fi
+if [[ -z "$BINARY" || ! -f "$BINARY" ]]; then
+    echo "Error: screen-ruler binary not found${BINARY:+ at $BINARY}."
+    echo "Build it first:  cargo build --release   (or pass -b /path/to/screen-ruler)"
     exit 1
 fi
 
