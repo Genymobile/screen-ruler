@@ -373,6 +373,47 @@ component Distance {
     }
 }
 
+// A distance with its leg chips: Δx under (or over) the horizontal leg, Δy
+// beside the vertical one, both on the outside of the right angle. Sized to
+// the canvas, which the chips are kept inside.
+component DistanceView {
+    in property <length> ax;
+    in property <length> ay;
+    in property <length> bx;
+    in property <length> by;
+    in property <bool> show-legs;
+    in property <string> dx;
+    in property <string> dy;
+
+    Distance {
+        width: 100%;
+        height: 100%;
+        ax: root.ax;
+        ay: root.ay;
+        bx: root.bx;
+        by: root.by;
+        show-legs: root.show-legs;
+    }
+    if root.show-legs: Chip {
+        text: root.dx;
+        anchor-x: (root.ax + root.bx) / 2;
+        anchor-y: root.ay;
+        offset-x: 0;
+        offset-y: root.by >= root.ay ? 8px : -28px;
+        canvas-width: root.width;
+        canvas-height: root.height;
+    }
+    if root.show-legs: Chip {
+        text: root.dy;
+        anchor-x: root.bx;
+        anchor-y: (root.ay + root.by) / 2;
+        offset-x: root.bx >= root.ax ? 10px : -10px;
+        offset-y: root.by >= root.ay ? 0 : -20px;
+        canvas-width: root.width;
+        canvas-height: root.height;
+    }
+}
+
 export component Overlay inherits Window {
     in property <image> backdrop;
     // The edge map, white on transparent, and how visible it is (0 = off).
@@ -525,7 +566,7 @@ export component Overlay inherits Window {
                 radius: root.color-radius;
             }
 
-            if root.show-distance: Distance {
+            if root.show-distance: DistanceView {
                 width: 100%;
                 height: 100%;
                 ax: root.distance-ax;
@@ -533,27 +574,8 @@ export component Overlay inherits Window {
                 bx: root.distance-bx;
                 by: root.distance-by;
                 show-legs: root.distance-legs;
-            }
-
-            // Leg chips: Δx under (or over) the horizontal leg, Δy beside the
-            // vertical one, both on the outside of the right angle.
-            if root.show-distance && root.distance-legs: Chip {
-                text: root.distance-dx;
-                anchor-x: (root.distance-ax + root.distance-bx) / 2;
-                anchor-y: root.distance-ay;
-                offset-x: 0;
-                offset-y: root.distance-by >= root.distance-ay ? 8px : -28px;
-                canvas-width: root.width;
-                canvas-height: root.height;
-            }
-            if root.show-distance && root.distance-legs: Chip {
-                text: root.distance-dy;
-                anchor-x: root.distance-bx;
-                anchor-y: (root.distance-ay + root.distance-by) / 2;
-                offset-x: root.distance-bx >= root.distance-ax ? 10px : -10px;
-                offset-y: root.distance-by >= root.distance-ay ? 0 : -20px;
-                canvas-width: root.width;
-                canvas-height: root.height;
+                dx: root.distance-dx;
+                dy: root.distance-dy;
             }
 
             Chip {
