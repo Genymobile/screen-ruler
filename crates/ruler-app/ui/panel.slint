@@ -39,10 +39,11 @@ component ModeIcon inherits Path {
     ][root.mode];
 }
 
-component ModeButton inherits Rectangle {
+export component ModeButton inherits Rectangle {
     // A mode icon, or -1 to show `glyph` instead.
     in property <int> mode;
     in property <string> glyph;
+    in property <length> glyph-size: 15px;
     in property <bool> active;
     in property <string> tooltip;
     callback clicked();
@@ -63,7 +64,7 @@ component ModeButton inherits Rectangle {
     if root.mode < 0: Text {
         text: root.glyph;
         color: root.active || touch.pressed ? Theme.accent : Theme.text;
-        font-size: 15px;
+        font-size: root.glyph-size;
         font-weight: 700;
     }
 
@@ -237,7 +238,6 @@ export component Help inherits Rectangle {
         }
     }
 
-    width: 408px;
     height: list.preferred-height;
     background: Theme.panel;
     border-radius: Theme.radius;

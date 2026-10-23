@@ -17,8 +17,8 @@ use ruler_core::color::KernelCache;
 use ruler_core::edges;
 use ruler_core::geometry::{Point, Rect};
 use ruler_core::state::{
-    format_distance, format_size, shows_delta_breakdown, Command, Control, Destructive, DragState,
-    Mode, RulerState, HELP_FADE, MODE_COUNT,
+    format_distance, format_size, shows_delta_breakdown, Annotation, AnnotationKind, Command,
+    Control, Destructive, DragState, Mode, RulerState, HELP_FADE, MODE_COUNT,
 };
 use slint::platform::Key;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
@@ -26,7 +26,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use crate::analysis;
 use crate::input::{self, Wheel};
 use crate::surface::{LogicalRays, Surface};
-use crate::{Dial, Overlay, Rays};
+use crate::{Dial, Mark, Overlay, Rays};
 
 /// Redraw interval while something animates (the edge preview fade).
 const FRAME: Duration = Duration::from_millis(16);
@@ -76,6 +76,8 @@ pub struct App {
     /// rebuild the rows, and a slider being dragged would lose its grab.
     dial_models: Vec<Rc<VecModel<Dial>>>,
     help_models: Vec<Rc<VecModel<SharedString>>>,
+    /// Each window's placed annotations.
+    annotation_models: Vec<Rc<VecModel<Mark>>>,
     recompute_timer: Timer,
     frame_timer: Timer,
 }
@@ -109,6 +111,7 @@ impl App {
             edge_count: None,
             dial_models: (0..count).map(|_| Rc::new(VecModel::default())).collect(),
             help_models: (0..count).map(|_| Rc::new(VecModel::default())).collect(),
+            annotation_models: (0..count).map(|_| Rc::new(VecModel::default())).collect(),
             recompute_timer: Timer::default(),
             frame_timer: Timer::default(),
         }));
@@ -125,6 +128,7 @@ impl App {
                 window.set_mode_tooltips(ModelRc::new(VecModel::from(tooltips.clone())));
                 window.set_dials(ModelRc::from(app.dial_models[monitor].clone()));
                 window.set_help_lines(ModelRc::from(app.help_models[monitor].clone()));
+                window.set_annotations(ModelRc::from(app.annotation_models[monitor].clone()));
             }
         }
         let mut started = app.borrow_mut();
@@ -252,6 +256,12 @@ impl App {
     fn finish_drag(&mut self, click: bool) {
         let previous = self.previous_drag.take().unwrap_or_default();
         if click {
+            // In a session a selection is placed as soon as it is dragged,
+            // so a click has nothing to confirm.
+            if self.state.session {
+                self.state.drag = DragState::default();
+                return;
+            }
             self.state.drag = previous;
             self.confirm_selection();
             return;
@@ -265,6 +275,12 @@ impl App {
                 self.state.drag.end = (shrunk.x + shrunk.width, shrunk.y + shrunk.height);
             }
         }
+        if self.state.session {
+            if let Some(rect) = self.state.drag.rect() {
+                self.annotate_rect(rect);
+            }
+            self.state.drag = DragState::default();
+        }
     }
 
     /// Drops a drag in progress. The button is still down, so the press is
@@ -277,12 +293,16 @@ impl App {
 
     /// Copies a finished rectangle selection and quits.
     fn confirm_selection(&mut self) {
-        if self.state.drag.has_selection {
+        if self.state.drag.has_selection && !self.state.session {
             self.state.copy_and_quit(None);
         }
     }
 
     fn click(&mut self, monitor: usize, x: f32, y: f32) {
+        if self.state.session {
+            self.session_click(monitor, x, y);
+            return;
+        }
         match self.state.mode {
             Mode::Crosshair => {
                 let size = self.surfaces[monitor].rays_at(x, y).map(|r| r.size());
@@ -297,6 +317,133 @@ impl App {
             },
             Mode::RectDrag | Mode::ShrinkToFit => {}
         }
+    }
+
+    /// A click in session mode places the current measurement as an
+    /// annotation, instead of copying it and quitting.
+    fn session_click(&mut self, monitor: usize, x: f32, y: f32) {
+        let at = Point { monitor, x, y };
+        let kind = match self.state.mode {
+            Mode::Crosshair => {
+                self.surfaces[monitor]
+                    .rays_at(x, y)
+                    .map(|rays| AnnotationKind::Crosshair {
+                        north: y - rays.north,
+                        south: y + rays.south,
+                        west: x - rays.west,
+                        east: x + rays.east,
+                    })
+            }
+            Mode::Container => {
+                if let Some(rect) = self.state.container.filter(|r| r.monitor == monitor) {
+                    self.annotate_rect(rect);
+                }
+                return;
+            }
+            Mode::ColorPicker => {
+                if let Some((point, sample)) = self
+                    .state
+                    .sample
+                    .clone()
+                    .filter(|(p, _)| p.monitor == monitor)
+                {
+                    self.state.add_annotation(Annotation {
+                        at: point,
+                        mode: Mode::ColorPicker,
+                        kind: AnnotationKind::Color {
+                            sample,
+                            radius: self.state.color_radius,
+                        },
+                    });
+                }
+                return;
+            }
+            Mode::Distance => {
+                let b = self.placement().filter(|p| p.monitor == monitor);
+                match (self.state.distance_anchor, b) {
+                    (Some(a), Some(b)) if a.monitor == monitor => {
+                        self.state.distance_anchor = None;
+                        if (a.x, a.y) != (b.x, b.y) {
+                            self.state.add_annotation(Annotation {
+                                at: a,
+                                mode: Mode::Distance,
+                                kind: AnnotationKind::Distance {
+                                    to_x: b.x,
+                                    to_y: b.y,
+                                },
+                            });
+                        }
+                    }
+                    _ => self.state.distance_anchor = b,
+                }
+                return;
+            }
+            // Placed when the drag is released, in `finish_drag`.
+            Mode::RectDrag | Mode::ShrinkToFit => None,
+        };
+        if let Some(kind) = kind {
+            self.state.add_annotation(Annotation {
+                at,
+                mode: self.state.mode,
+                kind,
+            });
+        }
+    }
+
+    /// Places a rectangle annotation, unless it has collapsed to nothing.
+    fn annotate_rect(&mut self, rect: Rect) {
+        if rect.width < 1.0 || rect.height < 1.0 {
+            return;
+        }
+        self.state.add_annotation(Annotation {
+            at: Point {
+                monitor: rect.monitor,
+                x: rect.x,
+                y: rect.y,
+            },
+            mode: self.state.mode,
+            kind: AnnotationKind::Rect {
+                width: rect.width,
+                height: rect.height,
+            },
+        });
+    }
+
+    /// Enters session mode, or asks to leave it (confirming first when that
+    /// would discard annotations). Tab and the SESSION button.
+    fn toggle_session(&mut self, via: Destructive) {
+        // A drag in progress belongs to the mode being left: finished after
+        // the switch, it would place an annotation in quick mode, or leave a
+        // quick-mode selection behind that the next click copies.
+        if self.state.drag.active {
+            self.cancel_drag();
+        }
+        if self.state.session {
+            self.state.request_destructive(via);
+        } else {
+            self.state.set_session(true);
+            // A quick-mode selection waiting for its confirming click would
+            // otherwise linger, with a hint about copying and quitting.
+            if self.state.drag.has_selection && !self.state.drag.active {
+                self.state.drag = DragState::default();
+            }
+            self.state
+                .show_feedback("Session mode: measurements stay on screen");
+        }
+    }
+
+    fn session_clicked(&mut self) {
+        self.dismiss_help();
+        self.toggle_session(Destructive::SessionButton);
+        self.process_commands();
+        self.render();
+    }
+
+    fn markdown_clicked(&mut self) {
+        self.state.clear_pending_destructive();
+        self.state.copy_annotations();
+        self.process_commands();
+        self.render();
     }
 
     fn mode_clicked(&mut self, index: usize) {
@@ -342,9 +489,16 @@ impl App {
     }
 
     /// Returns whether the key was handled.
-    fn key(&mut self, text: &str, ctrl: bool, _shift: bool) -> bool {
+    fn key(&mut self, text: &str, ctrl: bool, shift: bool, repeat: bool) -> bool {
         let is = |key: Key| text == SharedString::from(key).as_str();
         let digit = text.parse::<usize>().ok().filter(|_| text.len() == 1);
+
+        // A held key repeats within the confirmation window, so a repeat
+        // would confirm a discard nobody pressed twice for.
+        let discards = is(Key::Tab) || is(Key::Escape) || (!ctrl && text.eq_ignore_ascii_case("q"));
+        if repeat && discards {
+            return true;
+        }
 
         let handled = if let Some(mode) = digit.and_then(Mode::from_digit).filter(|_| !ctrl) {
             self.state.set_mode(mode);
@@ -363,6 +517,22 @@ impl App {
                 self.state.request_destructive(Destructive::Escape);
             }
             true
+        } else if is(Key::Tab) {
+            self.toggle_session(Destructive::ToggleSession);
+            true
+        } else if self.state.session && (text.eq_ignore_ascii_case("z") || text == "\u{1a}") {
+            // Ctrl+Z or Z undoes, Ctrl+Shift+Z redoes. A half-placed
+            // distance goes first, as with Esc.
+            if self.state.distance_anchor.is_some() && !(ctrl && shift) {
+                self.state.distance_anchor = None;
+            } else if ctrl && shift {
+                if !self.state.redo() {
+                    self.state.show_feedback("Nothing to redo");
+                }
+            } else if !self.state.undo() {
+                self.state.show_feedback("Nothing to undo");
+            }
+            true
         } else if is(Key::Return) {
             if self.state.mode.is_rect_selection() {
                 self.confirm_selection();
@@ -375,8 +545,13 @@ impl App {
             self.state.request_destructive(Destructive::Quit);
             true
         } else if ctrl && (text.eq_ignore_ascii_case("c") || text == "\u{3}") {
-            let size = self.live_crosshair().map(|(_, rays)| rays.size());
-            self.state.copy_and_quit(size);
+            if self.state.session {
+                self.state.clear_pending_destructive();
+                self.state.copy_annotations();
+            } else {
+                let size = self.live_crosshair().map(|(_, rays)| rays.size());
+                self.state.copy_and_quit(size);
+            }
             true
         } else {
             false
@@ -408,9 +583,14 @@ impl App {
                             with_app(App::analyse)
                         });
                 }
-                // Session mode (annotations, Markdown, image export) is not
-                // wired yet, and nothing reachable emits these.
-                Command::CopyText(_) | Command::CopyRegionImage(_) => {}
+                Command::CopyText(text) => {
+                    if let Err(e) = clipboard::copy_text(&text) {
+                        eprintln!("screen-ruler: could not copy to the clipboard: {e}");
+                        self.state.show_feedback("Could not copy to the clipboard");
+                    }
+                }
+                // Image export is not wired yet, and nothing reachable emits it.
+                Command::CopyRegionImage(_) => {}
             }
         }
     }
@@ -481,10 +661,16 @@ impl App {
             }
         }
         let help_fading = self.state.help_visible && self.state.help_auto_hide_at.is_some();
-        if self.preview_since.is_none() && !help_fading {
+        if self.preview_since.is_none() && !help_fading && !self.messages_showing() {
             self.frame_timer.stop();
         }
         self.render();
+    }
+
+    /// Whether a session message is up. They expire on their own, so frames
+    /// keep coming until they have, or they would stay on screen.
+    fn messages_showing(&mut self) -> bool {
+        self.state.destructive_prompt().is_some() || self.state.feedback_message().is_some()
     }
 
     // ------------------------------------------------------------ render
@@ -605,6 +791,11 @@ impl App {
             self.state.help_visible = false;
             self.state.help_auto_hide_at = None;
         }
+        let prompt = self.state.destructive_prompt().unwrap_or_default();
+        let feedback = self.state.feedback_message().unwrap_or_default();
+        if !prompt.is_empty() || !feedback.is_empty() {
+            self.animate();
+        }
 
         for monitor in 0..self.windows.len() {
             let live = self.live(monitor);
@@ -684,6 +875,19 @@ impl App {
             }
             window.set_hint_text(live.hint.unwrap_or_default().into());
 
+            window.set_session(self.state.session);
+            sync(
+                &self.annotation_models[monitor],
+                self.state
+                    .annotations
+                    .iter()
+                    .filter(|a| a.at.monitor == monitor)
+                    .map(mark)
+                    .collect(),
+            );
+            window.set_prompt_text(prompt.into());
+            window.set_feedback_text(feedback.as_str().into());
+
             let chrome = monitor == self.state.active_monitor;
             window.set_show_chrome(chrome);
             if chrome {
@@ -691,7 +895,10 @@ impl App {
                 window.set_help_opacity(help);
                 window.set_help_visible(self.state.help_visible);
                 sync(&self.dial_models[monitor], self.dials());
-                sync(&self.help_models[monitor], help_lines(self.state.mode));
+                sync(
+                    &self.help_models[monitor],
+                    help_lines(self.state.mode, self.state.session),
+                );
             }
         }
     }
@@ -739,9 +946,11 @@ fn wire(window: &Overlay, monitor: usize) {
     window.on_dial_changed(|index, value| with_app(|app| app.dial_changed(index as usize, value)));
     window.on_help_clicked(|| with_app(App::help_clicked));
     window.on_help_hovered(|| with_app(App::dismiss_help));
-    window.on_key(|text, ctrl, shift| {
+    window.on_session_clicked(|| with_app(App::session_clicked));
+    window.on_markdown_clicked(|| with_app(App::markdown_clicked));
+    window.on_key(|text, ctrl, shift, repeat| {
         let mut handled = false;
-        with_app(|app| handled = app.key(&text, ctrl, shift));
+        with_app(|app| handled = app.key(&text, ctrl, shift, repeat));
         handled
     });
 }
@@ -759,28 +968,102 @@ fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
     }
 }
 
-/// The shortcut help for `mode`, in quick mode.
-fn help_lines(mode: Mode) -> Vec<SharedString> {
-    let click = match mode {
-        Mode::RectDrag | Mode::ShrinkToFit => {
-            "Drag — select  ·  then click or Enter — copy it, then quit"
-        }
-        Mode::Distance => "Click — place point A, then point B to copy, then quit",
-        Mode::Crosshair | Mode::Container | Mode::ColorPicker => {
-            "Click — copy the measurement, then quit"
-        }
+/// The shortcut help for `mode`, in quick or session mode.
+fn help_lines(mode: Mode, session: bool) -> Vec<SharedString> {
+    let lines: Vec<String> = if session {
+        let click = match mode {
+            Mode::RectDrag => "Drag — place a rectangle",
+            Mode::ShrinkToFit => "Drag — tighten onto the content and place it",
+            Mode::Distance => "Click — place point A, then point B",
+            Mode::Crosshair | Mode::Container | Mode::ColorPicker => {
+                "Click — place the measurement"
+            }
+        };
+        vec![
+            format!("1–{MODE_COUNT} — switch measurement mode"),
+            click.to_string(),
+            "Ctrl+C — copy all annotations as Markdown".to_string(),
+            "Ctrl+Z or Z — undo  ·  Ctrl+Shift+Z — redo".to_string(),
+            "Wheel — adjust the first slider".to_string(),
+            "? or H — toggle this help (hover it to hide it)".to_string(),
+            "Tab or Esc — leave session mode  ·  Q — quit".to_string(),
+        ]
+    } else {
+        let click = match mode {
+            Mode::RectDrag | Mode::ShrinkToFit => {
+                "Drag — select  ·  then click or Enter — copy it, then quit"
+            }
+            Mode::Distance => "Click — place point A, then point B to copy, then quit",
+            Mode::Crosshair | Mode::Container | Mode::ColorPicker => {
+                "Click — copy the measurement, then quit"
+            }
+        };
+        vec![
+            format!("1–{MODE_COUNT} — switch measurement mode"),
+            click.to_string(),
+            "Ctrl+C — copy the measurement, then quit".to_string(),
+            "Tab — session mode: place several annotations".to_string(),
+            "Wheel — adjust the first slider".to_string(),
+            "? or H — toggle this help (hover it to hide it)".to_string(),
+            "Esc or Q — quit".to_string(),
+        ]
     };
-    [
-        format!("1–{MODE_COUNT} — switch measurement mode"),
-        click.to_string(),
-        "Ctrl+C — copy the measurement, then quit".to_string(),
-        "Wheel — adjust the first slider".to_string(),
-        "? or H — toggle this help (hover it to hide it)".to_string(),
-        "Esc or Q — quit".to_string(),
-    ]
-    .into_iter()
-    .map(SharedString::from)
-    .collect()
+    lines.into_iter().map(SharedString::from).collect()
+}
+
+/// A placed annotation as its window draws it: the same marks and chip
+/// as the live measurement it was placed from.
+fn mark(annotation: &Annotation) -> Mark {
+    let (x, y) = (annotation.at.x, annotation.at.y);
+    let mut mark = Mark {
+        x,
+        y,
+        text: annotation.measurement_text().into(),
+        chip_x: x,
+        chip_y: y,
+        chip_offset_x: CHIP_OFFSET.0,
+        chip_offset_y: CHIP_OFFSET.1,
+        ..Mark::default()
+    };
+    match &annotation.kind {
+        AnnotationKind::Crosshair {
+            north,
+            south,
+            west,
+            east,
+        } => {
+            mark.kind = 0;
+            mark.rays = Rays {
+                north: y - north,
+                south: south - y,
+                west: x - west,
+                east: east - x,
+            };
+        }
+        AnnotationKind::Rect { width, height } => {
+            mark.kind = 1;
+            mark.width = *width;
+            mark.height = *height;
+        }
+        AnnotationKind::Color { sample, radius } => {
+            mark.kind = 2;
+            mark.radius = *radius;
+            mark.swatch = slint::Color::from_rgb_u8(sample.r, sample.g, sample.b);
+            mark.text = sample.notations().join("\n").into();
+        }
+        AnnotationKind::Distance { to_x, to_y } => {
+            let distance = DistanceMark::between((x, y), (*to_x, *to_y));
+            mark.kind = 3;
+            mark.bx = *to_x;
+            mark.by = *to_y;
+            mark.legs = distance.legs;
+            mark.dx = format_distance(distance.delta.0.abs()).into();
+            mark.dy = format_distance(distance.delta.1.abs()).into();
+            (mark.chip_x, mark.chip_y) = distance.mid;
+            (mark.chip_offset_x, mark.chip_offset_y) = distance.chip_offset;
+        }
+    }
+    mark
 }
 
 /// The live marks one window shows, in its logical px.
@@ -870,6 +1153,84 @@ impl DistanceMark {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use ruler_core::color::Sample;
+
+    fn at(x: f32, y: f32) -> Point {
+        Point { monitor: 0, x, y }
+    }
+
+    #[test]
+    fn a_placed_crosshair_draws_the_rays_it_was_measured_with() {
+        // Stored as ray endpoints, drawn as lengths from the cursor.
+        let annotation = Annotation {
+            at: at(100.0, 50.0),
+            mode: Mode::Crosshair,
+            kind: AnnotationKind::Crosshair {
+                north: 30.0,
+                south: 80.0,
+                west: 60.0,
+                east: 150.0,
+            },
+        };
+        let mark = mark(&annotation);
+        assert_eq!(mark.kind, 0);
+        assert_eq!((mark.rays.north, mark.rays.south), (20.0, 30.0));
+        assert_eq!((mark.rays.west, mark.rays.east), (40.0, 50.0));
+        assert_eq!(mark.text, "90 \u{00D7} 50 px");
+        assert_eq!((mark.chip_x, mark.chip_y), (100.0, 50.0));
+    }
+
+    #[test]
+    fn a_placed_distance_puts_its_chip_off_the_middle_of_the_line() {
+        let annotation = Annotation {
+            at: at(0.0, 0.0),
+            mode: Mode::Distance,
+            kind: AnnotationKind::Distance {
+                to_x: 100.0,
+                to_y: 0.0,
+            },
+        };
+        let mark = mark(&annotation);
+        assert_eq!(mark.kind, 3);
+        assert_eq!((mark.bx, mark.by), (100.0, 0.0));
+        assert_eq!((mark.chip_x, mark.chip_y), (50.0, 0.0));
+        assert_eq!((mark.chip_offset_x, mark.chip_offset_y), (0.0, 14.0));
+        assert!(!mark.legs);
+    }
+
+    #[test]
+    fn a_placed_colour_shows_every_notation_in_its_bubble() {
+        let sample = Sample::from_rgb(255, 0, 0);
+        let annotation = Annotation {
+            at: at(5.0, 6.0),
+            mode: Mode::ColorPicker,
+            kind: AnnotationKind::Color {
+                sample: sample.clone(),
+                radius: 3.0,
+            },
+        };
+        let mark = mark(&annotation);
+        assert_eq!(mark.kind, 2);
+        assert_eq!(mark.radius, 3.0);
+        assert_eq!(mark.text, sample.notations().join("\n"));
+    }
+
+    #[test]
+    fn the_help_says_what_a_click_does_in_each_mode() {
+        let quick = help_lines(Mode::Crosshair, false);
+        assert!(quick.iter().any(|l| l.contains("then quit")));
+        assert!(quick.iter().any(|l| l.starts_with("Tab")), "{quick:?}");
+
+        for mode in Mode::ALL {
+            let session = help_lines(mode, true);
+            assert!(
+                !session.iter().any(|l| l.contains("then quit")),
+                "{mode:?}: nothing quits on a click in a session: {session:?}"
+            );
+            assert!(session.iter().any(|l| l.contains("undo")), "{mode:?}");
+        }
+    }
 
     #[test]
     fn legs_show_only_for_a_meaningfully_diagonal_line() {
