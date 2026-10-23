@@ -605,6 +605,7 @@ export component Overlay inherits Window {
     callback help-clicked();
     callback help-hovered();
     callback session-clicked();
+    callback markdown-clicked();
 
     callback pointer-moved(length, length);
     callback pointer-pressed(length, length);
@@ -775,7 +776,7 @@ export component Overlay inherits Window {
             }
 
             // Session controls in the top-left corner, apart from the
-            // measurement panel.
+            // measurement panel: SESSION, then MD while a session is on.
             HorizontalLayout {
                 visible: root.show-chrome;
                 x: 14px;
@@ -792,6 +793,14 @@ export component Overlay inherits Window {
                     active: root.session;
                     tooltip: root.session ? "Leave session mode  (Tab)" : "Session mode: place several annotations  (Tab)";
                     clicked => { root.session-clicked(); }
+                }
+                if root.session: ModeButton {
+                    width: 46px;
+                    mode: -1;
+                    glyph: "MD";
+                    glyph-size: 13px;
+                    tooltip: "Copy all annotations as Markdown  (Ctrl+C)";
+                    clicked => { root.markdown-clicked(); }
                 }
             }
 

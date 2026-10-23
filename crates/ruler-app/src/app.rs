@@ -439,6 +439,13 @@ impl App {
         self.render();
     }
 
+    fn markdown_clicked(&mut self) {
+        self.state.clear_pending_destructive();
+        self.state.copy_annotations();
+        self.process_commands();
+        self.render();
+    }
+
     fn mode_clicked(&mut self, index: usize) {
         if let Some(mode) = Mode::from_index(index) {
             self.state.set_mode(mode);
@@ -482,7 +489,7 @@ impl App {
     }
 
     /// Returns whether the key was handled.
-    fn key(&mut self, text: &str, ctrl: bool, _shift: bool, repeat: bool) -> bool {
+    fn key(&mut self, text: &str, ctrl: bool, shift: bool, repeat: bool) -> bool {
         let is = |key: Key| text == SharedString::from(key).as_str();
         let digit = text.parse::<usize>().ok().filter(|_| text.len() == 1);
 
@@ -513,6 +520,19 @@ impl App {
         } else if is(Key::Tab) {
             self.toggle_session(Destructive::ToggleSession);
             true
+        } else if self.state.session && (text.eq_ignore_ascii_case("z") || text == "\u{1a}") {
+            // Ctrl+Z or Z undoes, Ctrl+Shift+Z redoes. A half-placed
+            // distance goes first, as with Esc.
+            if self.state.distance_anchor.is_some() && !(ctrl && shift) {
+                self.state.distance_anchor = None;
+            } else if ctrl && shift {
+                if !self.state.redo() {
+                    self.state.show_feedback("Nothing to redo");
+                }
+            } else if !self.state.undo() {
+                self.state.show_feedback("Nothing to undo");
+            }
+            true
         } else if is(Key::Return) {
             if self.state.mode.is_rect_selection() {
                 self.confirm_selection();
@@ -525,8 +545,13 @@ impl App {
             self.state.request_destructive(Destructive::Quit);
             true
         } else if ctrl && (text.eq_ignore_ascii_case("c") || text == "\u{3}") {
-            let size = self.live_crosshair().map(|(_, rays)| rays.size());
-            self.state.copy_and_quit(size);
+            if self.state.session {
+                self.state.clear_pending_destructive();
+                self.state.copy_annotations();
+            } else {
+                let size = self.live_crosshair().map(|(_, rays)| rays.size());
+                self.state.copy_and_quit(size);
+            }
             true
         } else {
             false
@@ -558,9 +583,14 @@ impl App {
                             with_app(App::analyse)
                         });
                 }
-                // Markdown and image export are not wired yet, and nothing
-                // reachable emits these.
-                Command::CopyText(_) | Command::CopyRegionImage(_) => {}
+                Command::CopyText(text) => {
+                    if let Err(e) = clipboard::copy_text(&text) {
+                        eprintln!("screen-ruler: could not copy to the clipboard: {e}");
+                        self.state.show_feedback("Could not copy to the clipboard");
+                    }
+                }
+                // Image export is not wired yet, and nothing reachable emits it.
+                Command::CopyRegionImage(_) => {}
             }
         }
     }
@@ -917,6 +947,7 @@ fn wire(window: &Overlay, monitor: usize) {
     window.on_help_clicked(|| with_app(App::help_clicked));
     window.on_help_hovered(|| with_app(App::dismiss_help));
     window.on_session_clicked(|| with_app(App::session_clicked));
+    window.on_markdown_clicked(|| with_app(App::markdown_clicked));
     window.on_key(|text, ctrl, shift, repeat| {
         let mut handled = false;
         with_app(|app| handled = app.key(&text, ctrl, shift, repeat));
@@ -951,6 +982,8 @@ fn help_lines(mode: Mode, session: bool) -> Vec<SharedString> {
         vec![
             format!("1–{MODE_COUNT} — switch measurement mode"),
             click.to_string(),
+            "Ctrl+C — copy all annotations as Markdown".to_string(),
+            "Ctrl+Z or Z — undo  ·  Ctrl+Shift+Z — redo".to_string(),
             "Wheel — adjust the first slider".to_string(),
             "? or H — toggle this help (hover it to hide it)".to_string(),
             "Tab or Esc — leave session mode  ·  Q — quit".to_string(),
@@ -1195,6 +1228,7 @@ mod tests {
                 !session.iter().any(|l| l.contains("then quit")),
                 "{mode:?}: nothing quits on a click in a session: {session:?}"
             );
+            assert!(session.iter().any(|l| l.contains("undo")), "{mode:?}");
         }
     }
 

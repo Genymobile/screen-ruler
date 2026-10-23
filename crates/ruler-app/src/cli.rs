@@ -96,6 +96,9 @@ KEYS
     Enter          Copy the current selection and quit
     Ctrl+C         Copy the measurement and quit
     Wheel          Adjust the active mode's control
+    Tab            Toggle session mode, where measurements stay on screen:
+                   click or drag places one, Ctrl+C copies them all as
+                   Markdown, Ctrl+Z / Ctrl+Shift+Z undo and redo
     ? or H         Toggle the shortcut overlay
     Esc / Q        Quit
 ",
