@@ -578,6 +578,7 @@ export component Overlay inherits Window {
     callback help-clicked();
     callback help-hovered();
     callback session-clicked();
+    callback markdown-clicked();
 
     callback pointer-moved(length, length);
     callback pointer-pressed(length, length);
@@ -748,23 +749,37 @@ export component Overlay inherits Window {
             }
 
             // Session controls in the top-left corner, apart from the
-            // measurement panel.
-            HorizontalLayout {
+            // measurement panel: SESSION, then MD while a session is on.
+            Rectangle {
                 visible: root.show-chrome;
                 x: 14px;
                 y: 14px;
-                width: self.preferred-width;
-                height: self.preferred-height;
-                spacing: 8px;
+                width: session-row.preferred-width;
+                height: session-row.preferred-height;
 
-                ModeButton {
-                    width: 96px;
-                    mode: -1;
-                    glyph: "SESSION";
-                    glyph-size: 13px;
-                    active: root.session;
-                    tooltip: root.session ? "Leave session mode  (Tab)" : "Session mode: place several annotations  (Tab)";
-                    clicked => { root.session-clicked(); }
+                // Behind the buttons: swallows clicks in the gap between them.
+                TouchArea { }
+
+                session-row := HorizontalLayout {
+                    spacing: 8px;
+
+                    ModeButton {
+                        width: 96px;
+                        mode: -1;
+                        glyph: "SESSION";
+                        glyph-size: 13px;
+                        active: root.session;
+                        tooltip: root.session ? "Leave session mode  (Tab)" : "Session mode: place several annotations  (Tab)";
+                        clicked => { root.session-clicked(); }
+                    }
+                    if root.session: ModeButton {
+                        width: 46px;
+                        mode: -1;
+                        glyph: "MD";
+                        glyph-size: 13px;
+                        tooltip: "Copy all annotations as Markdown  (Ctrl+C)";
+                        clicked => { root.markdown-clicked(); }
+                    }
                 }
             }
 

@@ -449,6 +449,19 @@ impl App {
         self.render();
     }
 
+    fn markdown_clicked(&mut self) {
+        self.copy_markdown();
+        self.process_commands();
+        self.render();
+    }
+
+    /// Copies every annotation as Markdown: the MD button, and Ctrl+C in a
+    /// session.
+    fn copy_markdown(&mut self) {
+        self.state.clear_pending_destructive();
+        self.state.copy_annotations();
+    }
+
     fn mode_clicked(&mut self, index: usize) {
         if let Some(mode) = Mode::from_index(index) {
             self.state.set_mode(mode);
@@ -500,15 +513,21 @@ impl App {
     }
 
     /// Returns whether the key was handled.
-    fn key(&mut self, text: &str, ctrl: bool, _shift: bool, repeat: bool) -> bool {
+    fn key(&mut self, text: &str, ctrl: bool, shift: bool, repeat: bool) -> bool {
         let is = |key: Key| text == SharedString::from(key).as_str();
         let digit = text.parse::<usize>().ok().filter(|_| text.len() == 1);
         let quits = !ctrl && text.eq_ignore_ascii_case("q");
+        // In a session, Ctrl+Shift+C is kept for the image export, so it
+        // does not copy the Markdown there.
+        let copies = ctrl
+            && !(shift && self.state.session)
+            && (text.eq_ignore_ascii_case("c") || text == "\u{3}");
 
         // A held key repeats within the confirmation window, so a repeat
-        // would confirm a discard nobody pressed twice for.
+        // would confirm a discard nobody pressed twice for. A held Ctrl+C
+        // would copy again and again.
         let discards = is(Key::Tab) || is(Key::Escape) || quits;
-        if repeat && discards {
+        if repeat && (discards || copies) {
             return true;
         }
 
@@ -532,6 +551,20 @@ impl App {
         } else if is(Key::Tab) {
             self.toggle_session(Destructive::ToggleSession);
             true
+        } else if self.state.session && (text.eq_ignore_ascii_case("z") || text == "\u{1a}") {
+            // Ctrl+Z or Z undoes, Ctrl+Shift+Z redoes. A half-placed
+            // distance goes first, as with Esc. With Ctrl held, Z can arrive
+            // as its control character U+001A.
+            if ctrl && shift {
+                if !self.state.redo() {
+                    self.state.show_feedback("Nothing to redo");
+                }
+            } else if self.state.distance_anchor.is_some() {
+                self.state.distance_anchor = None;
+            } else if !self.state.undo() {
+                self.state.show_feedback("Nothing to undo");
+            }
+            true
         } else if is(Key::Return) {
             if self.state.mode.is_rect_selection() {
                 self.confirm_selection();
@@ -543,9 +576,13 @@ impl App {
         } else if quits {
             self.request_destructive(Destructive::Quit);
             true
-        } else if ctrl && (text.eq_ignore_ascii_case("c") || text == "\u{3}") {
-            let size = self.live_crosshair().map(|(_, rays)| rays.size());
-            self.state.copy_and_quit(size);
+        } else if copies {
+            if self.state.session {
+                self.copy_markdown();
+            } else {
+                let size = self.live_crosshair().map(|(_, rays)| rays.size());
+                self.state.copy_and_quit(size);
+            }
             true
         } else {
             false
@@ -577,9 +614,14 @@ impl App {
                             with_app(App::analyse)
                         });
                 }
-                // Markdown and image export are not wired yet, and nothing
-                // reachable emits these.
-                Command::CopyText(_) | Command::CopyRegionImage(_) => {}
+                Command::CopyText(text) => {
+                    if let Err(e) = clipboard::copy_text(&text) {
+                        eprintln!("screen-ruler: could not copy to the clipboard: {e}");
+                        self.state.show_feedback("Could not copy to the clipboard");
+                    }
+                }
+                // Image export is not wired yet, and nothing reachable emits it.
+                Command::CopyRegionImage(_) => {}
             }
         }
     }
@@ -937,6 +979,7 @@ fn wire(window: &Overlay, monitor: usize) {
     window.on_help_clicked(|| with_app(App::help_clicked));
     window.on_help_hovered(|| with_app(App::dismiss_help));
     window.on_session_clicked(|| with_app(App::session_clicked));
+    window.on_markdown_clicked(|| with_app(App::markdown_clicked));
     window.on_key(|text, ctrl, shift, repeat| {
         let mut handled = false;
         with_app(|app| handled = app.key(&text, ctrl, shift, repeat));
@@ -965,24 +1008,17 @@ fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
 
 /// The shortcut help for `mode`, in quick or session mode.
 fn help_lines(mode: Mode, session: bool) -> Vec<SharedString> {
-    let lines: Vec<String> = if session {
-        let click = match mode {
+    let click = if session {
+        match mode {
             Mode::RectDrag => "Drag — place a rectangle",
             Mode::ShrinkToFit => "Drag — tighten onto the content and place it",
             Mode::Distance => "Click — place point A, then point B",
             Mode::Crosshair | Mode::Container | Mode::ColorPicker => {
                 "Click — place the measurement"
             }
-        };
-        vec![
-            format!("1–{MODE_COUNT} — switch measurement mode"),
-            click.to_string(),
-            "Wheel — adjust the first slider".to_string(),
-            "? or H — toggle this help (hover it to hide it)".to_string(),
-            "Tab or Esc — leave session mode  ·  Q — quit".to_string(),
-        ]
+        }
     } else {
-        let click = match mode {
+        match mode {
             Mode::RectDrag | Mode::ShrinkToFit => {
                 "Drag — select  ·  then click or Enter — copy it, then quit"
             }
@@ -990,18 +1026,30 @@ fn help_lines(mode: Mode, session: bool) -> Vec<SharedString> {
             Mode::Crosshair | Mode::Container | Mode::ColorPicker => {
                 "Click — copy the measurement, then quit"
             }
-        };
-        vec![
-            format!("1–{MODE_COUNT} — switch measurement mode"),
-            click.to_string(),
-            "Ctrl+C — copy the measurement, then quit".to_string(),
-            "Tab — session mode: place several annotations".to_string(),
-            "Wheel — adjust the first slider".to_string(),
-            "? or H — toggle this help (hover it to hide it)".to_string(),
-            "Esc or Q — quit".to_string(),
-        ]
+        }
     };
-    lines.into_iter().map(SharedString::from).collect()
+    let (copy, undo_or_session, leave) = if session {
+        (
+            "Ctrl+C — copy all annotations as Markdown",
+            "Ctrl+Z or Z — undo  ·  Ctrl+Shift+Z — redo",
+            "Tab or Esc — leave session mode  ·  Q — quit",
+        )
+    } else {
+        (
+            "Ctrl+C — copy the measurement, then quit",
+            "Tab — session mode: place several annotations",
+            "Esc or Q — quit",
+        )
+    };
+    vec![
+        format!("1–{MODE_COUNT} — switch measurement mode").into(),
+        click.into(),
+        copy.into(),
+        undo_or_session.into(),
+        "Wheel — adjust the first slider".into(),
+        "? or H — toggle this help (hover it to hide it)".into(),
+        leave.into(),
+    ]
 }
 
 /// A placed annotation as its window draws it: the same marks and chip
@@ -1339,7 +1387,27 @@ mod tests {
                 !session.iter().any(|l| l.contains("then quit")),
                 "{mode:?}: nothing quits on a click in a session: {session:?}"
             );
+            assert!(session.iter().any(|l| l.contains("undo")), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn the_session_help_names_the_undo_and_leave_keys() {
+        let session = help_lines(Mode::Crosshair, true);
+        assert!(
+            session.iter().any(|l| l.starts_with("Ctrl+Z or Z")),
+            "{session:?}"
+        );
+        assert!(
+            session.iter().any(|l| l.starts_with("Tab or Esc")),
+            "{session:?}"
+        );
+    }
+
+    #[test]
+    fn the_quick_help_names_the_quit_keys() {
+        let quick = help_lines(Mode::Crosshair, false);
+        assert!(quick.iter().any(|l| l.starts_with("Esc or Q")), "{quick:?}");
     }
 
     #[test]

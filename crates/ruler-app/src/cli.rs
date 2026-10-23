@@ -96,8 +96,12 @@ KEYS
     Enter          Copy the current selection and quit
     Ctrl+C         Copy the measurement and quit
     Wheel          Adjust the active mode's control
+    Tab            Toggle session mode, where measurements stay on screen:
+                   click or drag places one, Ctrl+C copies them all as
+                   Markdown, Ctrl+Z or Z undoes, Ctrl+Shift+Z redoes,
+                   Tab or Esc leaves it
     ? or H         Toggle the shortcut overlay
-    Esc / Q        Quit
+    Esc / Q        Quit; in session mode, Esc leaves the session first
 ",
         default = edges::DEFAULT_SENSITIVITY,
         last = MODE_COUNT,
@@ -227,6 +231,20 @@ mod tests {
             usage.contains(&format!("MODES (press 1-{MODE_COUNT})")),
             "{usage}"
         );
+    }
+
+    #[test]
+    fn the_help_text_lists_the_session_keys() {
+        let usage = usage();
+        for keys in [
+            "Ctrl+C copies them all",
+            "Ctrl+Z or Z undoes",
+            "Ctrl+Shift+Z redoes",
+            "Tab or Esc leaves it",
+            "Esc leaves the session first",
+        ] {
+            assert!(usage.contains(keys), "missing {keys:?}:\n{usage}");
+        }
     }
 
     #[test]

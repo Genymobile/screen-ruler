@@ -657,47 +657,62 @@ impl RulerState {
         self.clear_pending_destructive();
     }
 
-    /// Undoes the last annotation. Returns false when there is nothing to undo.
+    /// Undoes the last annotation. Returns false when there is nothing to
+    /// undo. An undo disarms a pending discard, as placing does.
     pub fn undo(&mut self) -> bool {
-        match self.annotations.pop() {
-            Some(annotation) => {
-                self.redo_stack.push(annotation);
-                true
-            }
-            None => false,
-        }
+        let Some(annotation) = self.annotations.pop() else {
+            return false;
+        };
+        self.redo_stack.push(annotation);
+        self.clear_pending_destructive();
+        true
     }
 
-    /// Redoes the last undone annotation.
+    /// Redoes the last undone annotation. Returns false when there is
+    /// nothing to redo. A redo disarms a pending discard, as placing does.
     pub fn redo(&mut self) -> bool {
-        match self.redo_stack.pop() {
-            Some(annotation) => {
-                self.annotations.push(annotation);
-                true
-            }
-            None => false,
-        }
+        let Some(annotation) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.annotations.push(annotation);
+        self.clear_pending_destructive();
+        true
     }
 
-    /// Renders every annotation as a Markdown list.
+    /// Renders every annotation as a Markdown list. When the annotations
+    /// span several monitors, each line names its monitor, since the
+    /// coordinates are monitor-local:
+    ///
+    /// ```text
+    /// - Rectangle @ (12, 34) on monitor 2: 100 × 50 px
+    /// - Distance on monitor 1: A(5, 6) → B(105, 6) — 100 px
+    /// ```
     pub fn annotations_markdown(&self) -> String {
+        let spans_monitors = self
+            .annotations
+            .windows(2)
+            .any(|w| w[0].at.monitor != w[1].at.monitor);
         self.annotations
             .iter()
             .map(|annotation| {
+                let title = annotation.mode.export_title();
                 let measurement = annotation.measurement_text();
+                // Numbered from 1 in capture order: by top edge, then by
+                // left edge.
+                let monitor = if spans_monitors {
+                    let number = annotation.at.monitor + 1;
+                    format!(" on monitor {number}")
+                } else {
+                    String::new()
+                };
                 match annotation.mode {
                     // A distance already names both endpoints, so prefixing it
                     // with a single anchor coordinate would be redundant.
-                    Mode::Distance => {
-                        format!("- {}: {}", annotation.mode.export_title(), measurement)
+                    Mode::Distance => format!("- {title}{monitor}: {measurement}"),
+                    _ => {
+                        let (x, y) = (annotation.at.x.round(), annotation.at.y.round());
+                        format!("- {title} @ ({x}, {y}){monitor}: {measurement}")
                     }
-                    _ => format!(
-                        "- {} @ ({}, {}): {}",
-                        annotation.mode.export_title(),
-                        annotation.at.x.round(),
-                        annotation.at.y.round(),
-                        measurement
-                    ),
                 }
             })
             .collect::<Vec<_>>()
@@ -1176,6 +1191,45 @@ mod tests {
     }
 
     #[test]
+    fn undo_disarms_a_pending_discard() {
+        let mut s = session_with_work();
+        s.request_destructive(Destructive::ToggleSession);
+
+        assert!(s.undo());
+        assert_eq!(s.destructive_prompt(), None);
+        assert!(s.session);
+    }
+
+    #[test]
+    fn redo_disarms_a_pending_discard() {
+        let mut s = session_with_work();
+        s.add_annotation(Annotation::test_rect(5.0, 5.0, 20.0, 20.0));
+        assert!(s.undo());
+        s.request_destructive(Destructive::ToggleSession);
+
+        assert!(s.redo());
+        assert_eq!(s.destructive_prompt(), None);
+        assert!(s.session);
+    }
+
+    #[test]
+    fn a_redo_with_nothing_to_redo_keeps_the_prompt_armed() {
+        // Nothing changed, so the prompt is still about the same annotations.
+        let mut s = state();
+        s.set_session(true);
+        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
+        s.request_destructive(Destructive::ToggleSession);
+
+        assert!(!s.redo());
+        assert_eq!(
+            s.destructive_prompt(),
+            Some("Press Tab again to discard annotations")
+        );
+        s.request_destructive(Destructive::ToggleSession);
+        assert!(!s.session);
+    }
+
+    #[test]
     fn undo_on_an_empty_history_is_a_no_op() {
         let mut s = state();
         assert!(!s.undo());
@@ -1211,6 +1265,75 @@ mod tests {
         let mut s = state();
         s.add_annotation(Annotation::test_rect(0.0, 0.0, 200.0, 0.0));
         assert_eq!(s.annotations_markdown(), "- Rectangle @ (0, 0): 200 × 0 px");
+    }
+
+    #[test]
+    fn markdown_export_names_the_monitor_when_annotations_span_several() {
+        let mut s = state();
+        s.add_annotation(Annotation::test_rect(12.0, 34.0, 100.0, 50.0));
+        s.add_annotation(Annotation {
+            at: Point {
+                monitor: 1,
+                x: 5.0,
+                y: 6.0,
+            },
+            mode: Mode::Distance,
+            kind: AnnotationKind::Distance {
+                to_x: 105.0,
+                to_y: 6.0,
+            },
+        });
+
+        let markdown = s.annotations_markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+        assert_eq!(lines[0], "- Rectangle @ (12, 34) on monitor 1: 100 × 50 px");
+        assert!(
+            lines[1].starts_with("- Distance on monitor 2: A(5, 6) → B(105, 6)"),
+            "{}",
+            lines[1]
+        );
+    }
+
+    #[test]
+    fn markdown_export_on_one_monitor_does_not_name_it() {
+        let mut s = state();
+        for x in [0.0, 50.0] {
+            let mut annotation = Annotation::test_rect(x, 0.0, 10.0, 10.0);
+            annotation.at.monitor = 1;
+            s.add_annotation(annotation);
+        }
+
+        let markdown = s.annotations_markdown();
+        assert!(!markdown.contains("monitor"), "{markdown}");
+    }
+
+    #[test]
+    fn markdown_export_numbers_monitors_by_index_not_by_order() {
+        // Annotations come in placement order; the number must still be the
+        // monitor's own, so that it matches the layout.
+        let mut s = state();
+        s.add_annotation(Annotation {
+            at: Point {
+                monitor: 2,
+                x: 5.0,
+                y: 6.0,
+            },
+            mode: Mode::Distance,
+            kind: AnnotationKind::Distance {
+                to_x: 5.0,
+                to_y: 56.0,
+            },
+        });
+        s.add_annotation(Annotation::test_rect(12.0, 34.0, 100.0, 50.0));
+
+        let markdown = s.annotations_markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+        assert!(
+            lines[0].starts_with("- Distance on monitor 3: A(5, 6) → B(5, 56)"),
+            "{}",
+            lines[0]
+        );
+        assert_eq!(lines[1], "- Rectangle @ (12, 34) on monitor 1: 100 × 50 px");
     }
 
     #[test]
