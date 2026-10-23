@@ -4,7 +4,7 @@
 // side converts to and from image pixels.
 
 import { Theme } from "theme.slint";
-import { Dial, Panel, Help } from "panel.slint";
+import { Dial, Panel, Help, ModeButton } from "panel.slint";
 
 export { Dial }
 
@@ -14,6 +14,32 @@ export struct Rays {
     south: length,
     west: length,
     east: length,
+}
+
+// One placed session annotation, flattened for Slint. `kind` picks which of
+// the fields apply: 0 crosshair (rays from x, y), 1 rectangle (x, y, width,
+// height), 2 colour (radius and swatch at x, y; `text` is the notations, one
+// per line), 3 distance (x, y to bx, by). `text` and the chip fields place
+// the measurement chip, except for colour, which shows its bubble instead.
+export struct Mark {
+    kind: int,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    rays: Rays,
+    radius: length,
+    swatch: color,
+    bx: length,
+    by: length,
+    legs: bool,
+    dx: string,
+    dy: string,
+    text: string,
+    chip-x: length,
+    chip-y: length,
+    chip-offset-x: length,
+    chip-offset-y: length,
 }
 
 // A text chip that sits next to an anchor point, flipping to the other side
@@ -414,6 +440,101 @@ component DistanceView {
     }
 }
 
+// One placed annotation, drawn like the live mark it was placed from.
+component Annotation {
+    in property <Mark> mark;
+
+    if root.mark.kind == 0: Crosshair {
+        width: 100%;
+        height: 100%;
+        cx: root.mark.x;
+        cy: root.mark.y;
+        rays: root.mark.rays;
+    }
+    if root.mark.kind == 1: Outline {
+        animated: false;
+        x: root.mark.x;
+        y: root.mark.y;
+        width: root.mark.width;
+        height: root.mark.height;
+    }
+    if root.mark.kind == 2: ColorMarker {
+        width: 100%;
+        height: 100%;
+        cx: root.mark.x;
+        cy: root.mark.y;
+        radius: root.mark.radius;
+    }
+    if root.mark.kind == 2: ColorBubble {
+        swatch: root.mark.swatch;
+        text: root.mark.text;
+        anchor-x: root.mark.x;
+        anchor-y: root.mark.y;
+        canvas-width: root.width;
+        canvas-height: root.height;
+    }
+    if root.mark.kind == 3: DistanceView {
+        width: 100%;
+        height: 100%;
+        ax: root.mark.x;
+        ay: root.mark.y;
+        bx: root.mark.bx;
+        by: root.mark.by;
+        show-legs: root.mark.legs;
+        dx: root.mark.dx;
+        dy: root.mark.dy;
+    }
+    if root.mark.kind != 2: Chip {
+        text: root.mark.text;
+        anchor-x: root.mark.chip-x;
+        anchor-y: root.mark.chip-y;
+        offset-x: root.mark.chip-offset-x;
+        offset-y: root.mark.chip-offset-y;
+        canvas-width: root.width;
+        canvas-height: root.height;
+    }
+}
+
+// The session-mode frame around the monitor. It fades as the pointer nears
+// an edge, so it never hides what is being measured there.
+component SessionBorder inherits Rectangle {
+    in property <bool> hovered;
+    in property <length> pointer-x;
+    in property <length> pointer-y;
+
+    property <length> near: 50px;
+    property <length> far: 100px;
+    property <length> distance: min(min(root.pointer-x, root.pointer-y),
+        min(root.width - root.pointer-x, root.height - root.pointer-y));
+
+    border-width: 5px;
+    border-color: Theme.accent;
+    opacity: !root.hovered || root.distance >= root.far ? 0.85
+        : root.distance <= root.near ? 0.1
+        : 0.1 + (root.distance - root.near) / (root.far - root.near) * 0.75;
+}
+
+// A message in the middle of the screen: session feedback and the
+// confirm-before-discard prompt.
+component Bubble inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size;
+
+    visible: root.text != "";
+    width: label.preferred-width + 36px;
+    height: label.preferred-height + 22px;
+    background: Theme.panel;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.accent;
+
+    label := Text {
+        text: root.text;
+        color: Theme.text;
+        font-size: root.font-size;
+    }
+}
+
 export component Overlay inherits Window {
     in property <image> backdrop;
     // The edge map, white on transparent, and how visible it is (0 = off).
@@ -464,6 +585,13 @@ export component Overlay inherits Window {
     in property <length> chip-offset-y: 4px;
     in property <string> hint-text;
 
+    // Session mode: the annotations placed on this monitor, the frame, and
+    // the messages shown on the monitor with the chrome.
+    in property <bool> session;
+    in property <[Mark]> annotations;
+    in property <string> feedback-text;
+    in property <string> prompt-text;
+
     // Chrome, only on the monitor the pointer is on.
     in property <bool> show-chrome;
     in property <int> mode;
@@ -476,21 +604,23 @@ export component Overlay inherits Window {
     callback dial-changed(int, float);
     callback help-clicked();
     callback help-hovered();
+    callback session-clicked();
 
     callback pointer-moved(length, length);
     callback pointer-pressed(length, length);
     callback pointer-released(length, length);
     callback pointer-left();
     callback wheel(length);
-    // Key text as Slint reports it, plus the modifiers that matter.
-    callback key(string, bool, bool) -> bool;
+    // Key text as Slint reports it, the modifiers that matter (ctrl, shift),
+    // and whether it is an auto-repeat of a held key.
+    callback key(string, bool, bool, bool) -> bool;
 
     no-frame: true;
     forward-focus: keys;
 
     keys := FocusScope {
         key-pressed(event) => {
-            root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.shift)
+            root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.shift, event.repeat)
                 ? accept : reject
         }
 
@@ -529,6 +659,21 @@ export component Overlay inherits Window {
                 image-rendering: pixelated;
                 opacity: root.edges-opacity;
                 visible: root.edges-opacity > 0;
+            }
+
+            // Placed annotations, under the live marks.
+            for mark in root.annotations: Annotation {
+                width: 100%;
+                height: 100%;
+                mark: mark;
+            }
+
+            if root.session: SessionBorder {
+                width: 100%;
+                height: 100%;
+                hovered: canvas.has-hover;
+                pointer-x: canvas.mouse-x;
+                pointer-y: canvas.mouse-y;
             }
 
             // Sized to the window: a zero-size element would have its
@@ -602,6 +747,20 @@ export component Overlay inherits Window {
                 y: root.height - self.height - 48px;
             }
 
+            // The prompt in the middle, feedback just below it when both show.
+            prompt := Bubble {
+                visible: root.show-chrome && root.prompt-text != "";
+                text: root.prompt-text;
+                font-size: 18px;
+                y: (root.height - self.height) / 2;
+            }
+            Bubble {
+                visible: root.show-chrome && root.feedback-text != "";
+                text: root.feedback-text;
+                font-size: 16px;
+                y: (root.height - self.height) / 2 + (root.prompt-text != "" ? prompt.height + 12px : 0);
+            }
+
             panel := Panel {
                 visible: root.show-chrome;
                 x: (root.width - self.width) / 2;
@@ -615,11 +774,33 @@ export component Overlay inherits Window {
                 help-clicked => { root.help-clicked(); }
             }
 
+            // Session controls in the top-left corner, apart from the
+            // measurement panel.
+            HorizontalLayout {
+                visible: root.show-chrome;
+                x: 14px;
+                y: 14px;
+                width: self.preferred-width;
+                height: self.preferred-height;
+                spacing: 8px;
+
+                ModeButton {
+                    width: 96px;
+                    mode: -1;
+                    glyph: "SESSION";
+                    glyph-size: 13px;
+                    active: root.session;
+                    tooltip: root.session ? "Leave session mode  (Tab)" : "Session mode: place several annotations  (Tab)";
+                    clicked => { root.session-clicked(); }
+                }
+            }
+
             Help {
                 visible: root.show-chrome && root.help-opacity > 0.01;
                 opacity: root.help-opacity;
                 x: panel.x;
                 y: panel.y + panel.height + 10px;
+                width: panel.width;
                 lines: root.help-lines;
                 pointer-inside: canvas.has-hover
                     && canvas.mouse-x >= self.x && canvas.mouse-x < self.x + self.width
