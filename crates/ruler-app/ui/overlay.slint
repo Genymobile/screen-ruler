@@ -317,13 +317,18 @@ component Dashes {
 }
 
 // Point A to point B: the line, its endpoints, and, when the line is
-// meaningfully diagonal, the dashed right-angle legs with their lengths.
+// meaningfully diagonal, the dashed right-angle legs with their lengths: Δx
+// under (or over) the horizontal leg, Δy beside the vertical one, both on the
+// outside of the right angle. Sized to the canvas, which the chips are kept
+// inside.
 component Distance {
     in property <length> ax;
     in property <length> ay;
     in property <length> bx;
     in property <length> by;
     in property <bool> show-legs;
+    in property <string> dx;
+    in property <string> dy;
 
     if root.show-legs: Dashes {
         width: 100%;
@@ -370,6 +375,25 @@ component Distance {
         height: 5px;
         border-radius: 2.5px;
         background: Theme.accent;
+    }
+
+    if root.show-legs: Chip {
+        text: root.dx;
+        anchor-x: (root.ax + root.bx) / 2;
+        anchor-y: root.ay;
+        offset-x: 0;
+        offset-y: root.by >= root.ay ? 8px : -28px;
+        canvas-width: root.width;
+        canvas-height: root.height;
+    }
+    if root.show-legs: Chip {
+        text: root.dy;
+        anchor-x: root.bx;
+        anchor-y: (root.ay + root.by) / 2;
+        offset-x: root.bx >= root.ax ? 10px : -10px;
+        offset-y: root.by >= root.ay ? 0 : -20px;
+        canvas-width: root.width;
+        canvas-height: root.height;
     }
 }
 
@@ -533,27 +557,8 @@ export component Overlay inherits Window {
                 bx: root.distance-bx;
                 by: root.distance-by;
                 show-legs: root.distance-legs;
-            }
-
-            // Leg chips: Δx under (or over) the horizontal leg, Δy beside the
-            // vertical one, both on the outside of the right angle.
-            if root.show-distance && root.distance-legs: Chip {
-                text: root.distance-dx;
-                anchor-x: (root.distance-ax + root.distance-bx) / 2;
-                anchor-y: root.distance-ay;
-                offset-x: 0;
-                offset-y: root.distance-by >= root.distance-ay ? 8px : -28px;
-                canvas-width: root.width;
-                canvas-height: root.height;
-            }
-            if root.show-distance && root.distance-legs: Chip {
-                text: root.distance-dy;
-                anchor-x: root.distance-bx;
-                anchor-y: (root.distance-ay + root.distance-by) / 2;
-                offset-x: root.distance-bx >= root.distance-ax ? 10px : -10px;
-                offset-y: root.distance-by >= root.distance-ay ? 0 : -20px;
-                canvas-width: root.width;
-                canvas-height: root.height;
+                dx: root.distance-dx;
+                dy: root.distance-dy;
             }
 
             Chip {
