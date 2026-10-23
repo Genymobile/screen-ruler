@@ -13,6 +13,10 @@ use crate::geometry::{Point, Rect};
 
 /// How long a destructive action stays armed awaiting confirmation.
 const CONFIRM_WINDOW: Duration = Duration::from_millis(1500);
+/// How long after the close request that armed a discard the next one must
+/// come to confirm it. A held Alt+F4 repeats, and requests can come in a
+/// burst, so a closer one only re-arms.
+const CLOSE_CONFIRM_GAP: Duration = Duration::from_millis(150);
 /// How long transient session feedback stays on screen.
 const FEEDBACK_DURATION: Duration = Duration::from_millis(1200);
 /// How long the help overlay lingers at start-up before fading.
@@ -368,6 +372,8 @@ pub enum Destructive {
     Escape,
     /// Q.
     Quit,
+    /// A close request from the window manager, such as Alt+F4.
+    Close,
 }
 
 impl Destructive {
@@ -377,8 +383,16 @@ impl Destructive {
             Destructive::SessionButton => "Click SESSION again to discard annotations",
             Destructive::Escape => "Press Esc again to discard annotations",
             Destructive::Quit => "Press Q again to discard annotations",
+            Destructive::Close => "Close again to discard annotations",
         }
     }
+}
+
+/// A destructive action awaiting confirmation, and when it was armed.
+#[derive(Clone, Copy, Debug)]
+struct Pending {
+    action: Destructive,
+    armed_at: Instant,
 }
 
 /// A side effect for the shell to carry out.
@@ -514,7 +528,7 @@ pub struct RulerState {
     /// When the start-up help overlay should begin fading.
     pub help_auto_hide_at: Option<Instant>,
 
-    pending_destructive: Expiring<Destructive>,
+    pending_destructive: Expiring<Pending>,
     feedback: Expiring<String>,
 
     /// Set when the debug edge overlay should be drawn.
@@ -634,10 +648,13 @@ impl RulerState {
 
     // --------------------------------------------------------- annotations
 
-    /// Records an annotation, clearing the redo stack.
+    /// Records an annotation, clearing the redo stack. It also disarms a
+    /// pending discard: the prompt was about the annotations as they were,
+    /// and the next press of the same key should ask again.
     pub fn add_annotation(&mut self, annotation: Annotation) {
         self.annotations.push(annotation);
         self.redo_stack.clear();
+        self.clear_pending_destructive();
     }
 
     /// Undoes the last annotation. Returns false when there is nothing to undo.
@@ -704,6 +721,9 @@ impl RulerState {
 
     // ------------------------------------------------------------- session
 
+    /// Enters or leaves session mode. Leaving discards the annotations, the
+    /// work in progress and the session's feedback message, which would
+    /// otherwise outlive the session it was about.
     pub fn set_session(&mut self, enabled: bool) {
         if self.session == enabled {
             return;
@@ -717,6 +737,7 @@ impl RulerState {
             // annotation after re-entering the session.
             self.drag.clear();
             self.distance_anchor = None;
+            self.feedback.clear();
         }
         self.clear_pending_destructive();
     }
@@ -729,6 +750,11 @@ impl RulerState {
     /// Runs a destructive action, or arms it for confirmation when it would
     /// discard annotations.
     pub fn request_destructive(&mut self, action: Destructive) {
+        self.request_destructive_at(action, Instant::now());
+    }
+
+    /// [`Self::request_destructive`], for a request made at `now`.
+    fn request_destructive_at(&mut self, action: Destructive, now: Instant) {
         if !self.has_work_to_lose() {
             self.clear_pending_destructive();
             self.perform_destructive(action);
@@ -737,14 +763,24 @@ impl RulerState {
 
         // A second press of the *same* action within the window confirms it;
         // a different action, or the same one after the window, re-arms
-        // rather than firing.
-        if self.pending_destructive.get() == Some(&action) {
+        // rather than firing. So does a close that follows the one that
+        // armed it too closely to be a second, deliberate one.
+        let confirms = self.pending_destructive.get().is_some_and(|pending| {
+            pending.action == action
+                && (action != Destructive::Close
+                    || now.saturating_duration_since(pending.armed_at) >= CLOSE_CONFIRM_GAP)
+        });
+        if confirms {
             self.clear_pending_destructive();
             self.perform_destructive(action);
             return;
         }
 
-        self.pending_destructive.set(action, CONFIRM_WINDOW);
+        let pending = Pending {
+            action,
+            armed_at: now,
+        };
+        self.pending_destructive.set(pending, CONFIRM_WINDOW);
     }
 
     fn perform_destructive(&mut self, action: Destructive) {
@@ -757,7 +793,7 @@ impl RulerState {
                     self.push(Command::Quit);
                 }
             }
-            Destructive::Quit => self.push(Command::Quit),
+            Destructive::Quit | Destructive::Close => self.push(Command::Quit),
         }
     }
 
@@ -767,7 +803,9 @@ impl RulerState {
 
     /// The confirmation prompt to display, if one is armed and unexpired.
     pub fn destructive_prompt(&mut self) -> Option<&'static str> {
-        self.pending_destructive.get().map(|action| action.prompt())
+        self.pending_destructive
+            .get()
+            .map(|pending| pending.action.prompt())
     }
 
     pub fn show_feedback(&mut self, message: &str) {
@@ -905,6 +943,15 @@ mod tests {
 
     fn point(x: f32, y: f32) -> Point {
         Point { monitor: 0, x, y }
+    }
+
+    /// A session with an annotation, so that a destructive action asks to
+    /// confirm.
+    fn session_with_work() -> RulerState {
+        let mut s = state();
+        s.set_session(true);
+        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
+        s
     }
 
     #[test]
@@ -1160,6 +1207,13 @@ mod tests {
     }
 
     #[test]
+    fn a_line_rectangle_exports_its_zero_side() {
+        let mut s = state();
+        s.add_annotation(Annotation::test_rect(0.0, 0.0, 200.0, 0.0));
+        assert_eq!(s.annotations_markdown(), "- Rectangle @ (0, 0): 200 × 0 px");
+    }
+
+    #[test]
     fn markdown_export_of_nothing_is_empty() {
         assert_eq!(state().annotations_markdown(), "");
     }
@@ -1217,6 +1271,53 @@ mod tests {
 
         s.request_destructive(Destructive::Quit);
         assert!(s.take_commands().contains(&Command::Quit));
+    }
+
+    #[test]
+    fn a_close_asks_for_a_second_close() {
+        let mut s = session_with_work();
+        s.request_destructive(Destructive::Close);
+        assert!(!s.take_commands().contains(&Command::Quit));
+        assert_eq!(
+            s.destructive_prompt(),
+            Some("Close again to discard annotations")
+        );
+    }
+
+    #[test]
+    fn a_close_right_after_the_one_that_armed_it_only_re_arms() {
+        let mut s = session_with_work();
+        let armed = Instant::now();
+        s.request_destructive_at(Destructive::Close, armed);
+
+        s.request_destructive_at(Destructive::Close, armed + Duration::from_millis(50));
+        assert!(!s.take_commands().contains(&Command::Quit));
+        assert!(s.destructive_prompt().is_some());
+    }
+
+    #[test]
+    fn a_close_after_the_gap_confirms() {
+        let mut s = session_with_work();
+        let armed = Instant::now();
+        s.request_destructive_at(Destructive::Close, armed);
+
+        s.request_destructive_at(Destructive::Close, armed + Duration::from_millis(200));
+        assert!(s.take_commands().contains(&Command::Quit));
+    }
+
+    #[test]
+    fn placing_an_annotation_disarms_a_pending_discard() {
+        let mut s = state();
+        s.set_session(true);
+        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
+        s.request_destructive(Destructive::ToggleSession);
+
+        s.add_annotation(Annotation::test_rect(5.0, 5.0, 20.0, 20.0));
+        assert_eq!(s.destructive_prompt(), None);
+        // The next press asks again rather than confirming.
+        s.request_destructive(Destructive::ToggleSession);
+        assert!(s.session);
+        assert_eq!(s.annotations.len(), 2);
     }
 
     #[test]
@@ -1304,13 +1405,27 @@ mod tests {
     }
 
     #[test]
+    fn leaving_the_session_clears_its_feedback() {
+        let mut s = state();
+        s.set_session(true);
+        s.show_feedback("Session mode: measurements stay on screen");
+
+        s.request_destructive(Destructive::ToggleSession);
+        assert!(!s.session);
+        assert_eq!(s.feedback_message(), None);
+    }
+
+    #[test]
     fn a_repeat_after_the_confirmation_expired_re_arms_instead() {
         let mut s = state();
         s.set_session(true);
         s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
         // Armed, but already past its window, with nothing having polled it.
-        s.pending_destructive
-            .set(Destructive::ToggleSession, Duration::ZERO);
+        let pending = Pending {
+            action: Destructive::ToggleSession,
+            armed_at: Instant::now(),
+        };
+        s.pending_destructive.set(pending, Duration::ZERO);
 
         s.request_destructive(Destructive::ToggleSession);
         assert!(
