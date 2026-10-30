@@ -3,20 +3,30 @@
 //! Deliberately free of any windowing or drawing types: the UI layer reads this
 //! and renders it, and side effects the shell must perform (quit, clipboard)
 //! leave through [`RulerState::take_commands`]. That keeps the behaviour that
-//! is easy to get wrong — mode switching, undo/redo, the confirm-before-discard
-//! flow — testable without a display.
+//! is easy to get wrong — mode switching, undo/redo, the hold-to-confirm
+//! discard — testable without a display.
 
 use std::time::{Duration, Instant};
 
 use crate::color::Sample;
 use crate::geometry::{Point, Rect};
 
-/// How long a destructive action stays armed awaiting confirmation.
-const CONFIRM_WINDOW: Duration = Duration::from_millis(1500);
-/// How long after the close request that armed a discard the next one must
-/// come to confirm it. A held Alt+F4 repeats, and requests can come in a
-/// burst, so a closer one only re-arms.
-const CLOSE_CONFIRM_GAP: Duration = Duration::from_millis(150);
+/// How long a discard's key or button must be held to confirm it.
+const HOLD_TO_CONFIRM: Duration = Duration::from_millis(1000);
+/// How long the discard prompt stays up once nothing holds it, so it can be
+/// read.
+const PROMPT_DURATION: Duration = Duration::from_millis(1500);
+/// Close requests carry no key release: a hold by close requests lasts while
+/// they keep coming, and ends when none has come for this long. Where a held
+/// Alt+F4 repeats (GNOME's Mutter sends a single close instead), it does so
+/// once its repeat delay has passed, every 30–40 ms by default and every
+/// 400 ms or so at the slowest Windows setting, which still keeps the hold
+/// going. A single close, or a burst from a dash Quit, stops at once.
+///
+/// The first close lapses before the repeats start, as the usual repeat delay
+/// (500–660 ms) is longer than this gap: a held Alt+F4 fills the bar from its
+/// first repeat, and so takes about the repeat delay plus a second.
+const CLOSE_HOLD_GAP: Duration = Duration::from_millis(450);
 /// How long transient session feedback stays on screen.
 const FEEDBACK_DURATION: Duration = Duration::from_millis(1200);
 /// How long the help overlay lingers at start-up before fading.
@@ -361,7 +371,8 @@ pub fn format_distance_summary(ax: f32, ay: f32, bx: f32, by: f32) -> String {
     summary
 }
 
-/// An action that discards work and therefore asks for confirmation.
+/// An action that discards work, and so is held to confirm it when there
+/// are annotations to lose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Destructive {
     /// Leave session mode via Tab.
@@ -377,22 +388,53 @@ pub enum Destructive {
 }
 
 impl Destructive {
+    /// What to do to confirm the action, shown while it is held and for a
+    /// while after a hold that ended too early.
     fn prompt(self) -> &'static str {
         match self {
-            Destructive::ToggleSession => "Press Tab again to discard annotations",
-            Destructive::SessionButton => "Click SESSION again to discard annotations",
-            Destructive::Escape => "Press Esc again to discard annotations",
-            Destructive::Quit => "Press Q again to discard annotations",
-            Destructive::Close => "Close again to discard annotations",
+            Destructive::ToggleSession => "Hold Tab to discard annotations",
+            Destructive::SessionButton => "Hold SESSION to discard annotations",
+            Destructive::Escape => "Hold Esc to discard annotations",
+            Destructive::Quit => "Hold Q to discard annotations and quit",
+            // A close request comes from the window manager, through keys or
+            // a button the app cannot know, and a held close may arrive as a
+            // single request, so the prompt points to Q, which can be held.
+            Destructive::Close => "Hold Q to discard annotations and quit",
         }
     }
 }
 
-/// A destructive action awaiting confirmation, and when it was armed.
+/// A destructive action being held, which confirms once held for
+/// [`HOLD_TO_CONFIRM`].
 #[derive(Clone, Copy, Debug)]
-struct Pending {
+struct Hold {
     action: Destructive,
-    armed_at: Instant,
+    /// When the press that started the hold came.
+    since: Instant,
+    /// When the latest close request came. Only a [`Destructive::Close`]
+    /// hold reads it: see [`CLOSE_HOLD_GAP`].
+    last_close: Instant,
+    /// Whether a frame has already found the hold full. It confirms on the
+    /// frame after, so that a release queued behind that frame's timer is
+    /// handled first.
+    seen_full: bool,
+}
+
+impl Hold {
+    /// How long the hold has lasted by `now`. A close hold counts only up to
+    /// its latest close request: with no release to end it, the user may have
+    /// let go any time since.
+    fn held(&self, now: Instant) -> Duration {
+        let held_until = match self.action {
+            Destructive::Close => self.last_close,
+            _ => now,
+        };
+        held_until.saturating_duration_since(self.since)
+    }
+
+    fn is_full(&self, now: Instant) -> bool {
+        self.held(now) >= HOLD_TO_CONFIRM
+    }
 }
 
 /// A side effect for the shell to carry out.
@@ -411,7 +453,7 @@ pub enum Command {
 
 /// A value that stops being reported once its deadline passes.
 ///
-/// Both the confirm-before-discard prompt and the transient feedback message
+/// Both the discard prompt a hold leaves up and the transient feedback message
 /// are "show this until it times out", so they share one implementation rather
 /// than each hand-rolling the same expiry check.
 struct Expiring<T>(Option<(T, Instant)>);
@@ -528,7 +570,11 @@ pub struct RulerState {
     /// When the start-up help overlay should begin fading.
     pub help_auto_hide_at: Option<Instant>,
 
-    pending_destructive: Expiring<Pending>,
+    /// The discard being held, if any.
+    hold: Option<Hold>,
+    /// The prompt of a hold that ended before it confirmed, left up so that
+    /// it can be read.
+    prompt: Expiring<Destructive>,
     feedback: Expiring<String>,
 
     /// Set when the debug edge overlay should be drawn.
@@ -560,7 +606,8 @@ impl RulerState {
             export_drag: DragState::default(),
             help_visible: true,
             help_auto_hide_at: Some(Instant::now() + HELP_AUTO_HIDE),
-            pending_destructive: Expiring::new(),
+            hold: None,
+            prompt: Expiring::new(),
             feedback: Expiring::new(),
             debug_edges,
             edge_preview_until: None,
@@ -581,7 +628,7 @@ impl RulerState {
 
     /// Switches mode, discarding any selection that does not carry over.
     pub fn set_mode(&mut self, mode: Mode) {
-        self.clear_pending_destructive();
+        self.cancel_hold();
         self.cancel_export();
         if self.mode == mode {
             return;
@@ -648,34 +695,33 @@ impl RulerState {
 
     // --------------------------------------------------------- annotations
 
-    /// Records an annotation, clearing the redo stack. It also disarms a
-    /// pending discard: the prompt was about the annotations as they were,
-    /// and the next press of the same key should ask again.
+    /// Records an annotation, clearing the redo stack. It also ends a hold
+    /// or prompt: it was about the annotations as they were.
     pub fn add_annotation(&mut self, annotation: Annotation) {
         self.annotations.push(annotation);
         self.redo_stack.clear();
-        self.clear_pending_destructive();
+        self.cancel_hold();
     }
 
     /// Undoes the last annotation. Returns false when there is nothing to
-    /// undo. An undo disarms a pending discard, as placing does.
+    /// undo. An undo ends a hold or prompt, as placing does.
     pub fn undo(&mut self) -> bool {
         let Some(annotation) = self.annotations.pop() else {
             return false;
         };
         self.redo_stack.push(annotation);
-        self.clear_pending_destructive();
+        self.cancel_hold();
         true
     }
 
     /// Redoes the last undone annotation. Returns false when there is
-    /// nothing to redo. A redo disarms a pending discard, as placing does.
+    /// nothing to redo. A redo ends a hold or prompt, as placing does.
     pub fn redo(&mut self) -> bool {
         let Some(annotation) = self.redo_stack.pop() else {
             return false;
         };
         self.annotations.push(annotation);
-        self.clear_pending_destructive();
+        self.cancel_hold();
         true
     }
 
@@ -754,7 +800,7 @@ impl RulerState {
             self.distance_anchor = None;
             self.feedback.clear();
         }
-        self.clear_pending_destructive();
+        self.cancel_hold();
     }
 
     /// True when leaving session mode would throw away placed annotations.
@@ -762,40 +808,103 @@ impl RulerState {
         self.session && !self.annotations.is_empty()
     }
 
-    /// Runs a destructive action, or arms it for confirmation when it would
-    /// discard annotations.
+    /// Runs a destructive action at once, or starts holding it when it would
+    /// discard annotations. The hold confirms in [`Self::advance_hold`] once
+    /// held long enough, and [`Self::release_destructive`] ends it.
     pub fn request_destructive(&mut self, action: Destructive) {
         self.request_destructive_at(action, Instant::now());
     }
 
-    /// [`Self::request_destructive`], for a request made at `now`.
+    /// [`Self::request_destructive`], for a press at `now`.
     fn request_destructive_at(&mut self, action: Destructive, now: Instant) {
         if !self.has_work_to_lose() {
-            self.clear_pending_destructive();
+            self.cancel_hold();
             self.perform_destructive(action);
             return;
         }
+        // Every press starts the hold afresh, so two short presses never add
+        // up to a long one. A different action takes the hold over.
+        self.start_hold(action, now);
+    }
 
-        // A second press of the *same* action within the window confirms it;
-        // a different action, or the same one after the window, re-arms
-        // rather than firing. So does a close that follows the one that
-        // armed it too closely to be a second, deliberate one.
-        let confirms = self.pending_destructive.get().is_some_and(|pending| {
-            pending.action == action
-                && (action != Destructive::Close
-                    || now.saturating_duration_since(pending.armed_at) >= CLOSE_CONFIRM_GAP)
-        });
-        if confirms {
-            self.clear_pending_destructive();
-            self.perform_destructive(action);
-            return;
+    /// Quits at once, or starts or continues a hold by close requests when
+    /// that would discard annotations: the window manager asked to close a
+    /// window, as a held Alt+F4 does over and over on some systems.
+    pub fn request_close(&mut self) {
+        self.request_close_at(Instant::now());
+    }
+
+    /// [`Self::request_close`], for a close request at `now`.
+    fn request_close_at(&mut self, now: Instant) {
+        match &mut self.hold {
+            Some(hold)
+                if hold.action == Destructive::Close
+                    && now.saturating_duration_since(hold.last_close) <= CLOSE_HOLD_GAP =>
+            {
+                hold.last_close = now;
+            }
+            // Nothing to lose, no hold, a close hold that has lapsed, or
+            // another action's: as any other press.
+            _ => self.request_destructive_at(Destructive::Close, now),
         }
+    }
 
-        let pending = Pending {
+    /// Starts holding `action` from `now`, in place of any hold or prompt.
+    fn start_hold(&mut self, action: Destructive, now: Instant) {
+        self.prompt.clear();
+        self.hold = Some(Hold {
             action,
-            armed_at: now,
+            since: now,
+            last_close: now,
+            seen_full: false,
+        });
+    }
+
+    /// Ends the hold, if any, without confirming it: its key or button was
+    /// let go. Its prompt stays up a while, so that a tap still says what
+    /// holding would do.
+    pub fn release_destructive(&mut self) {
+        if let Some(hold) = self.hold.take() {
+            self.prompt.set(hold.action, PROMPT_DURATION);
+        }
+    }
+
+    /// Confirms the hold on the frame after the one that finds it full, and
+    /// ends a hold by close requests once they have stopped coming. Called
+    /// on every frame while [`Self::holding`].
+    ///
+    /// The prompt left up when a close hold lapses expires on real time, not
+    /// on `now`.
+    pub fn advance_hold(&mut self, now: Instant) {
+        let Some(hold) = &mut self.hold else {
+            return;
         };
-        self.pending_destructive.set(pending, CONFIRM_WINDOW);
+        let close_stopped = hold.action == Destructive::Close
+            && now.saturating_duration_since(hold.last_close) > CLOSE_HOLD_GAP;
+        if close_stopped {
+            self.release_destructive();
+        } else if hold.seen_full {
+            let action = hold.action;
+            self.cancel_hold();
+            self.perform_destructive(action);
+        } else if hold.is_full(now) {
+            hold.seen_full = true;
+        }
+    }
+
+    /// Whether a discard is being held, so frames must keep coming to
+    /// confirm it.
+    pub fn holding(&self) -> bool {
+        self.hold.is_some()
+    }
+
+    /// How much of the hold has been held, from 0.0 to 1.0, for the bar
+    /// that fills in the prompt. 0.0 when nothing is held. A close hold's bar
+    /// stops at its latest close request, so it stops when the user lets go.
+    pub fn hold_progress(&self, now: Instant) -> f32 {
+        self.hold.map_or(0.0, |hold| {
+            (hold.held(now).as_secs_f32() / HOLD_TO_CONFIRM.as_secs_f32()).min(1.0)
+        })
     }
 
     fn perform_destructive(&mut self, action: Destructive) {
@@ -812,15 +921,20 @@ impl RulerState {
         }
     }
 
-    pub fn clear_pending_destructive(&mut self) {
-        self.pending_destructive.clear();
+    /// Ends the hold, if any, without confirming it, and takes its prompt
+    /// down: whatever happened instead made it moot.
+    pub fn cancel_hold(&mut self) {
+        self.hold = None;
+        self.prompt.clear();
     }
 
-    /// The confirmation prompt to display, if one is armed and unexpired.
+    /// The discard prompt to display: the held action's, or else the one a
+    /// hold left up, while unexpired.
     pub fn destructive_prompt(&mut self) -> Option<&'static str> {
-        self.pending_destructive
-            .get()
-            .map(|pending| pending.action.prompt())
+        match self.hold {
+            Some(hold) => Some(hold.action.prompt()),
+            None => self.prompt.get().map(|action| action.prompt()),
+        }
     }
 
     pub fn show_feedback(&mut self, message: &str) {
@@ -960,8 +1074,20 @@ mod tests {
         Point { monitor: 0, x, y }
     }
 
-    /// A session with an annotation, so that a destructive action asks to
-    /// confirm.
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    /// Runs the frame timer from `t0` to `t0 + for_ms`: a frame every
+    /// 16 ms, as the app's.
+    fn frames(s: &mut RulerState, t0: Instant, for_ms: u64) {
+        for millis in (16..=for_ms).step_by(16) {
+            s.advance_hold(t0 + ms(millis));
+        }
+    }
+
+    /// A session with an annotation, so that a destructive action has to be
+    /// held.
     fn session_with_work() -> RulerState {
         let mut s = state();
         s.set_session(true);
@@ -1191,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_disarms_a_pending_discard() {
+    fn undo_ends_a_hold() {
         let mut s = session_with_work();
         s.request_destructive(Destructive::ToggleSession);
 
@@ -1201,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn redo_disarms_a_pending_discard() {
+    fn redo_ends_a_hold() {
         let mut s = session_with_work();
         s.add_annotation(Annotation::test_rect(5.0, 5.0, 20.0, 20.0));
         assert!(s.undo());
@@ -1213,19 +1339,14 @@ mod tests {
     }
 
     #[test]
-    fn a_redo_with_nothing_to_redo_keeps_the_prompt_armed() {
-        // Nothing changed, so the prompt is still about the same annotations.
-        let mut s = state();
-        s.set_session(true);
-        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
-        s.request_destructive(Destructive::ToggleSession);
+    fn a_redo_with_nothing_to_redo_keeps_the_hold_going() {
+        // Nothing changed, so the hold is still about the same annotations.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::ToggleSession, t0);
 
         assert!(!s.redo());
-        assert_eq!(
-            s.destructive_prompt(),
-            Some("Press Tab again to discard annotations")
-        );
-        s.request_destructive(Destructive::ToggleSession);
+        frames(&mut s, t0, 1100);
         assert!(!s.session);
     }
 
@@ -1359,88 +1480,457 @@ mod tests {
     }
 
     #[test]
-    fn leaving_session_mode_with_annotations_asks_for_confirmation() {
-        let mut s = state();
-        s.set_session(true);
-        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
+    fn leaving_session_mode_with_annotations_needs_a_one_second_hold() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
 
-        s.request_destructive(Destructive::ToggleSession);
-        assert!(s.session, "first press must not discard anything");
+        s.request_destructive_at(Destructive::ToggleSession, t0);
         assert_eq!(
             s.destructive_prompt(),
-            Some("Press Tab again to discard annotations")
+            Some("Hold Tab to discard annotations")
         );
+        s.advance_hold(t0 + ms(999));
+        assert!(s.session, "a hold short of a second discards nothing");
 
-        s.request_destructive(Destructive::ToggleSession);
-        assert!(!s.session, "second press confirms");
+        // Full at one second; confirmed on the frame after.
+        s.advance_hold(t0 + ms(1000));
+        s.advance_hold(t0 + ms(1016));
+        assert!(!s.session, "a one-second hold confirms");
         assert!(s.annotations.is_empty());
     }
 
     #[test]
-    fn a_different_destructive_action_re_arms_rather_than_confirming() {
-        let mut s = state();
-        s.set_session(true);
-        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
+    fn a_full_hold_waits_a_frame_before_it_confirms() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::ToggleSession, t0);
 
-        s.request_destructive(Destructive::ToggleSession);
-        // Pressing Q now must not be treated as confirming the Tab.
-        s.request_destructive(Destructive::Quit);
-        assert!(s.session, "Q must not confirm a pending Tab");
-        assert!(!s.take_commands().contains(&Command::Quit));
+        s.advance_hold(t0 + ms(1000));
+        assert!(s.session);
+    }
+
+    #[test]
+    fn a_release_right_after_the_hold_fills_discards_nothing() {
+        // Slint runs timers before queued input: a release that came before
+        // the frame which found the hold full is handled after it.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::ToggleSession, t0);
+
+        s.advance_hold(t0 + ms(1000));
+        s.release_destructive();
+        s.advance_hold(t0 + ms(1016));
+
+        assert!(s.session);
+        assert_eq!(s.annotations.len(), 1);
+    }
+
+    #[test]
+    fn letting_go_early_discards_nothing() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::Escape, t0);
+
+        frames(&mut s, t0, 500);
+        s.release_destructive();
+        frames(&mut s, t0 + ms(500), 1500);
+
+        assert!(s.session);
+        assert_eq!(s.annotations.len(), 1);
+    }
+
+    #[test]
+    fn letting_go_early_leaves_the_prompt_up_with_an_empty_bar() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::Escape, t0);
+
+        s.release_destructive();
+
         assert_eq!(
             s.destructive_prompt(),
-            Some("Press Q again to discard annotations")
+            Some("Hold Esc to discard annotations")
+        );
+        assert_eq!(s.hold_progress(t0 + ms(500)), 0.0, "nothing is held");
+    }
+
+    #[test]
+    fn pressing_twice_does_not_confirm() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+
+        s.request_destructive_at(Destructive::ToggleSession, t0);
+        s.release_destructive();
+        s.request_destructive_at(Destructive::ToggleSession, t0 + ms(800));
+        frames(&mut s, t0 + ms(800), 400);
+
+        assert!(s.session, "the second press starts the hold afresh");
+    }
+
+    #[test]
+    fn a_second_press_restarts_the_hold_even_without_a_release() {
+        // A release can go missing; the next press must not then confirm a
+        // hold nobody kept.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+
+        s.request_destructive_at(Destructive::ToggleSession, t0);
+        s.request_destructive_at(Destructive::ToggleSession, t0 + ms(800));
+        frames(&mut s, t0 + ms(800), 400);
+
+        assert!(s.session);
+    }
+
+    #[test]
+    fn a_different_action_takes_the_hold_over_from_its_own_press() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+
+        s.request_destructive_at(Destructive::ToggleSession, t0);
+        s.request_destructive_at(Destructive::Quit, t0 + ms(600));
+        assert_eq!(
+            s.destructive_prompt(),
+            Some("Hold Q to discard annotations and quit")
         );
 
-        s.request_destructive(Destructive::Quit);
+        // Past a second after the Tab, but not after the Q.
+        frames(&mut s, t0 + ms(600), 600);
+        assert!(s.session, "the Tab hold is gone");
+        assert!(s.take_commands().is_empty());
+
+        frames(&mut s, t0 + ms(1200), 500);
         assert!(s.take_commands().contains(&Command::Quit));
     }
 
     #[test]
-    fn a_close_asks_for_a_second_close() {
+    fn a_single_close_only_starts_a_hold_that_lapses() {
         let mut s = session_with_work();
-        s.request_destructive(Destructive::Close);
-        assert!(!s.take_commands().contains(&Command::Quit));
+        let t0 = Instant::now();
+
+        s.request_close_at(t0);
         assert_eq!(
             s.destructive_prompt(),
-            Some("Close again to discard annotations")
+            Some("Hold Q to discard annotations and quit")
         );
+        frames(&mut s, t0, 500);
+
+        assert!(s.take_commands().is_empty());
+        assert!(!s.holding(), "the hold is gone");
+        assert!(s.destructive_prompt().is_some(), "the prompt stays up");
     }
 
     #[test]
-    fn a_close_right_after_the_one_that_armed_it_only_re_arms() {
+    fn a_close_burst_does_not_quit() {
+        // Some docks send several close requests for one Quit.
         let mut s = session_with_work();
-        let armed = Instant::now();
-        s.request_destructive_at(Destructive::Close, armed);
+        let t0 = Instant::now();
+        for millis in [0, 1, 2] {
+            s.request_close_at(t0 + ms(millis));
+        }
 
-        s.request_destructive_at(Destructive::Close, armed + Duration::from_millis(50));
-        assert!(!s.take_commands().contains(&Command::Quit));
-        assert!(s.destructive_prompt().is_some());
+        frames(&mut s, t0, 1500);
+        assert!(s.take_commands().is_empty());
+        assert!(s.session);
     }
 
     #[test]
-    fn a_close_after_the_gap_confirms() {
+    fn a_held_close_fills_the_hold_and_quits() {
+        // A held Alt+F4: one close, nothing through a 500 ms repeat delay,
+        // then a close every 30 ms; a frame every 16 ms.
         let mut s = session_with_work();
-        let armed = Instant::now();
-        s.request_destructive_at(Destructive::Close, armed);
+        let t0 = Instant::now();
+        s.request_close_at(t0);
 
-        s.request_destructive_at(Destructive::Close, armed + Duration::from_millis(200));
+        let mut quit_at = None;
+        for millis in 1..=2000 {
+            let now = t0 + ms(millis);
+            if millis >= 500 && (millis - 500) % 30 == 0 {
+                s.request_close_at(now);
+            }
+            if millis % 16 == 0 {
+                s.advance_hold(now);
+            }
+            if s.take_commands().contains(&Command::Quit) {
+                quit_at = Some(millis);
+                break;
+            }
+        }
+
+        // The single close lapses during the repeat delay, so the hold runs
+        // from the first repeat, at 500 ms. The close at 1520 ms is the first
+        // a second after it, and the frame after it, at 1536 ms, confirms.
+        assert_eq!(quit_at, Some(1536));
+    }
+
+    #[test]
+    fn letting_go_of_a_held_close_before_the_bar_fills_does_not_quit() {
+        // Closes every 30 ms up to 85% of the hold, then none: there is no
+        // release, so only the missing requests can tell.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        for millis in (0..=850).step_by(30) {
+            s.request_close_at(t0 + ms(millis));
+        }
+
+        frames(&mut s, t0, 2000);
+        assert!(s.take_commands().is_empty());
+        assert!(s.session);
+    }
+
+    #[test]
+    fn a_close_hold_bar_stops_when_the_closes_stop() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        for millis in (0..=850).step_by(50) {
+            s.request_close_at(t0 + ms(millis));
+        }
+
+        // Every frame until the hold lapses, 450 ms after the last close.
+        for millis in (850..=1300).step_by(16) {
+            let now = t0 + ms(millis);
+            s.advance_hold(now);
+            assert_eq!(s.hold_progress(now), 0.85, "at {millis} ms");
+        }
+    }
+
+    #[test]
+    fn a_close_request_a_second_into_the_hold_quits() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        for millis in (0..=1020).step_by(30) {
+            s.request_close_at(t0 + ms(millis));
+        }
+
+        frames(&mut s, t0, 1100);
         assert!(s.take_commands().contains(&Command::Quit));
     }
 
     #[test]
-    fn placing_an_annotation_disarms_a_pending_discard() {
+    fn a_close_repeating_every_400_ms_still_fills_the_hold() {
+        // The slowest key repeat Windows offers; a frame every 16 ms.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        for millis in 0..=1300 {
+            let now = t0 + ms(millis);
+            if millis % 400 == 0 {
+                s.request_close_at(now);
+            }
+            if millis % 16 == 0 {
+                s.advance_hold(now);
+            }
+        }
+
+        assert!(s.take_commands().contains(&Command::Quit));
+    }
+
+    #[test]
+    fn a_close_quits_at_once_when_nothing_would_be_lost() {
         let mut s = state();
         s.set_session(true);
-        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
-        s.request_destructive(Destructive::ToggleSession);
+        s.request_close_at(Instant::now());
+        assert!(s.take_commands().contains(&Command::Quit));
+    }
+
+    #[test]
+    fn placing_an_annotation_ends_a_hold() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::ToggleSession, t0);
 
         s.add_annotation(Annotation::test_rect(5.0, 5.0, 20.0, 20.0));
         assert_eq!(s.destructive_prompt(), None);
-        // The next press asks again rather than confirming.
-        s.request_destructive(Destructive::ToggleSession);
+        frames(&mut s, t0, 1100);
         assert!(s.session);
         assert_eq!(s.annotations.len(), 2);
+    }
+
+    #[test]
+    fn the_hold_progress_fills_over_the_hold() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        assert_eq!(s.hold_progress(t0), 0.0);
+
+        s.request_destructive_at(Destructive::Quit, t0);
+        assert_eq!(s.hold_progress(t0), 0.0);
+        assert_eq!(s.hold_progress(t0 + ms(250)), 0.25);
+        assert_eq!(s.hold_progress(t0 + ms(5000)), 1.0, "capped when full");
+    }
+
+    #[test]
+    fn a_held_esc_leaves_the_session_without_quitting() {
+        // Esc both leaves the session and quits: a confirmed hold must do
+        // only the first.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::Escape, t0);
+
+        frames(&mut s, t0, 1100);
+        assert!(!s.session);
+        assert!(s.take_commands().is_empty());
+    }
+
+    #[test]
+    fn a_confirmed_hold_leaves_no_prompt_behind() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::Quit, t0);
+
+        frames(&mut s, t0, 1100);
+        assert!(s.take_commands().contains(&Command::Quit));
+        assert_eq!(s.destructive_prompt(), None);
+        assert!(!s.holding());
+    }
+
+    #[test]
+    fn no_action_is_held_when_nothing_would_be_lost() {
+        let actions = [
+            Destructive::ToggleSession,
+            Destructive::SessionButton,
+            Destructive::Escape,
+            Destructive::Quit,
+        ];
+        for action in actions {
+            let mut s = state();
+            s.set_session(true);
+            let t0 = Instant::now();
+            s.request_destructive_at(action, t0);
+
+            let quit = s.take_commands().contains(&Command::Quit);
+            assert!(!s.session || quit, "{action:?} ran at once");
+            assert_eq!(s.destructive_prompt(), None, "{action:?}");
+            assert_eq!(s.hold_progress(t0), 0.0, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn switching_mode_ends_a_hold() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::ToggleSession, t0);
+
+        s.set_mode(Mode::Distance);
+        assert_eq!(s.destructive_prompt(), None);
+        frames(&mut s, t0, 1100);
+        assert!(s.session);
+    }
+
+    #[test]
+    fn undo_takes_down_the_prompt_a_hold_left_up() {
+        let mut s = session_with_work();
+        s.request_destructive_at(Destructive::Escape, Instant::now());
+        s.release_destructive();
+        assert!(s.destructive_prompt().is_some());
+
+        assert!(s.undo());
+        assert_eq!(s.destructive_prompt(), None);
+    }
+
+    #[test]
+    fn the_prompt_a_hold_left_up_goes_once_it_expires() {
+        // Set directly with no lifetime: `release_destructive` gives it
+        // `PROMPT_DURATION` of real time, which a test would have to sleep.
+        let mut s = session_with_work();
+        s.prompt.set(Destructive::Escape, Duration::ZERO);
+
+        assert_eq!(s.destructive_prompt(), None);
+    }
+
+    #[test]
+    fn a_stopped_close_hold_ends_on_the_first_frame_after_a_stall() {
+        // Closes come for 700 ms then stop. The first frame, after a long
+        // stall, comes 510 ms after the last close: the hold must end.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        for millis in (0..=700).step_by(30) {
+            s.request_close_at(t0 + ms(millis));
+        }
+
+        s.advance_hold(t0 + ms(1200));
+        assert!(s.take_commands().is_empty());
+        assert!(!s.holding(), "the hold is gone");
+        assert_eq!(
+            s.destructive_prompt(),
+            Some("Hold Q to discard annotations and quit")
+        );
+    }
+
+    #[test]
+    fn close_requests_exactly_the_gap_apart_keep_the_hold_going() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_close_at(t0);
+        s.request_close_at(t0 + CLOSE_HOLD_GAP);
+
+        s.advance_hold(t0 + CLOSE_HOLD_GAP * 2);
+        assert_eq!(
+            s.hold_progress(t0 + CLOSE_HOLD_GAP * 2),
+            0.45,
+            "held from the first close to the second"
+        );
+    }
+
+    #[test]
+    fn a_close_after_a_lapse_starts_the_hold_afresh_without_a_frame_between() {
+        // No frame ran to end the first hold: the second close must still
+        // see it has lapsed.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_close_at(t0);
+        s.request_close_at(t0 + ms(500));
+
+        assert_eq!(s.hold_progress(t0 + ms(500)), 0.0);
+    }
+
+    #[test]
+    fn a_close_takes_the_hold_over_from_a_key() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::ToggleSession, t0);
+        // Within `CLOSE_HOLD_GAP` of the Tab, which must not matter.
+        s.request_close_at(t0 + ms(100));
+        assert_eq!(
+            s.destructive_prompt(),
+            Some("Hold Q to discard annotations and quit")
+        );
+
+        // The close is held, repeating every 40 ms.
+        let mut quit_at = None;
+        for millis in (140..=2000).step_by(40) {
+            let now = t0 + ms(millis);
+            s.request_close_at(now);
+            s.advance_hold(now);
+            if s.take_commands().contains(&Command::Quit) {
+                quit_at = Some(millis);
+                break;
+            }
+        }
+
+        assert!(s.session, "the Tab hold did not confirm");
+        assert_eq!(
+            quit_at,
+            Some(1140),
+            "on the frame after the close a second after the first"
+        );
+    }
+
+    #[test]
+    fn a_key_takes_the_hold_over_from_a_close() {
+        // The key's hold has a release, so it does not lapse when closes
+        // stop coming.
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_close_at(t0);
+        s.request_destructive_at(Destructive::Quit, t0 + ms(100));
+        assert_eq!(
+            s.destructive_prompt(),
+            Some("Hold Q to discard annotations and quit")
+        );
+
+        s.advance_hold(t0 + ms(1099));
+        s.advance_hold(t0 + ms(1100));
+        assert!(s.take_commands().is_empty());
+        s.advance_hold(t0 + ms(1116));
+        assert!(s.take_commands().contains(&Command::Quit));
     }
 
     #[test]
@@ -1536,29 +2026,6 @@ mod tests {
         s.request_destructive(Destructive::ToggleSession);
         assert!(!s.session);
         assert_eq!(s.feedback_message(), None);
-    }
-
-    #[test]
-    fn a_repeat_after_the_confirmation_expired_re_arms_instead() {
-        let mut s = state();
-        s.set_session(true);
-        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
-        // Armed, but already past its window, with nothing having polled it.
-        let pending = Pending {
-            action: Destructive::ToggleSession,
-            armed_at: Instant::now(),
-        };
-        s.pending_destructive.set(pending, Duration::ZERO);
-
-        s.request_destructive(Destructive::ToggleSession);
-        assert!(
-            s.session,
-            "a late second press must not discard the annotations"
-        );
-        assert_eq!(
-            s.destructive_prompt(),
-            Some("Press Tab again to discard annotations")
-        );
     }
 
     #[test]

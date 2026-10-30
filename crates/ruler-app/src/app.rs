@@ -29,7 +29,8 @@ use crate::surface::{LogicalRays, Surface};
 use crate::{AnnotationMark, Dial, MarkKind, Overlay, Rays};
 
 /// Redraw interval while something animates (the edge preview and help
-/// fades), and while a session message is up, until it expires.
+/// fades), while a session message is up, until it expires, and while a
+/// discard is held.
 const FRAME: Duration = Duration::from_millis(16);
 
 pub type Shared = Rc<RefCell<App>>;
@@ -414,7 +415,7 @@ impl App {
         self.place(at, kind);
     }
 
-    /// Enters session mode, or asks to leave it (confirming first when that
+    /// Enters session mode, or asks to leave it (held to confirm when that
     /// would discard annotations). Tab and the SESSION button.
     fn toggle_session(&mut self, via: Destructive) {
         if self.state.session {
@@ -431,18 +432,41 @@ impl App {
         }
     }
 
-    /// Runs or arms a destructive action. When it leaves the session, the
-    /// press in progress goes too: released in quick mode, it would leave a
-    /// selection behind, or copy and quit.
+    /// Runs a destructive action, or starts holding it when it has to be
+    /// held to confirm.
     fn request_destructive(&mut self, action: Destructive) {
+        self.cancel_drag_if_session_left(|state| state.request_destructive(action));
+    }
+
+    /// Runs `change`, which may leave the session. If it does, the press in
+    /// progress goes too: released in quick mode, it would leave a selection
+    /// behind, or copy and quit.
+    fn cancel_drag_if_session_left(&mut self, change: impl FnOnce(&mut RulerState)) {
         let session = self.state.session;
-        self.state.request_destructive(action);
+        change(&mut self.state);
         if self.state.session != session {
             self.cancel_drag();
         }
     }
 
-    fn session_clicked(&mut self) {
+    /// Ends a discard's hold without confirming it: a key or the SESSION
+    /// button was let go, or the window lost the focus, and with it the
+    /// release it would have reported.
+    fn release_destructive(&mut self) {
+        self.state.release_destructive();
+        self.render();
+    }
+
+    /// Confirms a discard once it has been held long enough, on the frame
+    /// timer.
+    fn advance_hold(&mut self) {
+        self.cancel_drag_if_session_left(|state| state.advance_hold(Instant::now()));
+        self.process_commands();
+    }
+
+    /// The SESSION button went down. It acts on the press, not the click, so
+    /// that holding it can confirm a discard.
+    fn session_pressed(&mut self) {
         self.dismiss_help();
         self.toggle_session(Destructive::SessionButton);
         self.process_commands();
@@ -458,7 +482,7 @@ impl App {
     /// Copies every annotation as Markdown: the MD button, and Ctrl+C in a
     /// session.
     fn copy_markdown(&mut self) {
-        self.state.clear_pending_destructive();
+        self.state.cancel_hold();
         self.state.copy_annotations();
     }
 
@@ -475,10 +499,11 @@ impl App {
         self.render();
     }
 
-    /// The window manager asked to close a window: quits, asking for a
-    /// second close first when that would discard annotations.
+    /// The window manager asked to close a window: quits, or, with
+    /// annotations to lose, holds while close requests keep coming, as from
+    /// a held Alt+F4; see `CLOSE_HOLD_GAP`.
     fn close_requested(&mut self) {
-        self.request_destructive(Destructive::Close);
+        self.state.request_close();
         self.process_commands();
         self.render();
     }
@@ -523,9 +548,11 @@ impl App {
             && !(shift && self.state.session)
             && (text.eq_ignore_ascii_case("c") || text == "\u{3}");
 
-        // A held key repeats within the confirmation window, so a repeat
-        // would confirm a discard nobody pressed twice for. A held Ctrl+C
-        // would copy again and again.
+        // A repeat must neither restart a hold, which would then never
+        // complete, nor run an action again: with nothing to lose, a held
+        // Tab would toggle the session on and off, and a held Esc would
+        // leave the session, then quit. A held Ctrl+C would copy again and
+        // again.
         let discards = is(Key::Tab) || is(Key::Escape) || quits;
         if repeat && (discards || copies) {
             return true;
@@ -676,8 +703,8 @@ impl App {
     }
 
     /// Keeps frames coming while something fades (the edge preview, the
-    /// start-up help) or a session message is up, until it expires; `tick`
-    /// stops them once nothing does.
+    /// start-up help), a session message is up, until it expires, or a
+    /// discard is held; `tick` stops them once nothing does.
     fn animate(&mut self) {
         if !self.frame_timer.running() {
             self.frame_timer
@@ -686,22 +713,26 @@ impl App {
     }
 
     fn tick(&mut self) {
+        self.advance_hold();
         if let Some(since) = self.preview_since {
             if input::preview_finished(since.elapsed()) {
                 self.preview_since = None;
             }
         }
         let help_fading = self.state.help_visible && self.state.help_auto_hide_at.is_some();
-        if self.preview_since.is_none() && !help_fading && !self.messages_showing() {
+        if self.preview_since.is_none() && !help_fading && !self.session_needs_frames() {
             self.frame_timer.stop();
         }
         self.render();
     }
 
-    /// Whether a session message is up. They expire on their own, so frames
-    /// keep coming until they have, or they would stay on screen.
-    fn messages_showing(&mut self) -> bool {
-        self.state.destructive_prompt().is_some() || self.state.feedback_message().is_some()
+    /// Whether a discard is held, which frames confirm, or a session
+    /// message is up. Messages expire on their own, so frames keep coming
+    /// until they have, or they would stay on screen.
+    fn session_needs_frames(&mut self) -> bool {
+        self.state.holding()
+            || self.state.destructive_prompt().is_some()
+            || self.state.feedback_message().is_some()
     }
 
     // ------------------------------------------------------------ render
@@ -823,8 +854,9 @@ impl App {
             self.state.help_auto_hide_at = None;
         }
         let prompt = self.state.destructive_prompt().unwrap_or_default();
+        let progress = self.state.hold_progress(Instant::now());
         let feedback = self.state.feedback_message().unwrap_or_default();
-        if self.messages_showing() {
+        if self.session_needs_frames() {
             self.animate();
         }
 
@@ -917,6 +949,7 @@ impl App {
                     .collect(),
             );
             window.set_prompt_text(prompt.into());
+            window.set_prompt_progress(progress);
             window.set_feedback_text(feedback.as_str().into());
 
             let chrome = monitor == self.state.active_monitor;
@@ -977,13 +1010,20 @@ fn wire(window: &Overlay, monitor: usize) {
     window.on_dial_changed(|index, value| with_app(|app| app.dial_changed(index as usize, value)));
     window.on_help_clicked(|| with_app(App::help_clicked));
     window.on_help_hovered(|| with_app(App::dismiss_help));
-    window.on_session_clicked(|| with_app(App::session_clicked));
+    window.on_session_pressed(|| with_app(App::session_pressed));
+    window.on_session_released(|| with_app(App::release_destructive));
     window.on_markdown_clicked(|| with_app(App::markdown_clicked));
     window.on_key(|text, ctrl, shift, repeat| {
         let mut handled = false;
         with_app(|app| handled = app.key(&text, ctrl, shift, repeat));
         handled
     });
+    // Any release ends a hold, not only the held key's: a release can
+    // report other text than its press (Shift+Tab gives Backtab, and the
+    // case or layout can change in between).
+    window.on_key_released(|| with_app(App::release_destructive));
+    // A release made after the window lost the focus goes elsewhere.
+    window.on_focus_lost(|| with_app(App::release_destructive));
     // A close request (Alt+F4, or the window manager) quits, for every
     // monitor at once, rather than closing this one window.
     window.window().on_close_requested(|| {

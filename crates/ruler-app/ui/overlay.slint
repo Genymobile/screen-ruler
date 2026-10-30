@@ -194,7 +194,7 @@ component SnapMarker {
 
 // A centred message box, used for the bottom hint and for the session
 // prompt and feedback. With no `x` set, Slint centres an element in its
-// parent.
+// parent. Children are drawn over it, as the prompt's hold bar is.
 component Hint inherits Rectangle {
     in property <string> text;
     in property <length> font-size: Theme.chip-font-size;
@@ -564,6 +564,9 @@ export component Overlay inherits Window {
     in property <[AnnotationMark]> annotations;
     in property <string> feedback-text;
     in property <string> prompt-text;
+    // How much of a discard has been held, from 0 to 1, for the bar in the
+    // prompt.
+    in property <float> prompt-progress;
 
     // Chrome, only on the monitor the pointer is on.
     in property <bool> show-chrome;
@@ -577,7 +580,10 @@ export component Overlay inherits Window {
     callback dial-changed(int, float);
     callback help-clicked();
     callback help-hovered();
-    callback session-clicked();
+    // The SESSION button went down; then a button came up, the pointer
+    // left it, or the press was cancelled.
+    callback session-pressed();
+    callback session-released();
     callback markdown-clicked();
 
     callback pointer-moved(length, length);
@@ -588,6 +594,9 @@ export component Overlay inherits Window {
     // Key text as Slint reports it, the modifiers that matter (ctrl, shift),
     // and whether it is an auto-repeat of a held key.
     callback key(string, bool, bool, bool) -> bool;
+    // Any key went up, or the focus went away and the releases with it.
+    callback key-released();
+    callback focus-lost();
 
     no-frame: true;
     forward-focus: keys;
@@ -596,6 +605,13 @@ export component Overlay inherits Window {
         key-pressed(event) => {
             root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.shift, event.repeat)
                 ? accept : reject
+        }
+        key-released => {
+            root.key-released();
+            accept
+        }
+        focus-lost => {
+            root.focus-lost();
         }
 
         canvas := TouchArea {
@@ -727,6 +743,24 @@ export component Overlay inherits Window {
                 text: root.prompt-text;
                 font-size: 18px;
                 y: (root.height - self.height) / 2;
+
+                // The hold bar, in the bottom padding: the track, then the
+                // fill, which the Rust side moves on every frame of a hold.
+                Rectangle {
+                    x: 10px;
+                    y: parent.height - 7px;
+                    width: parent.width - 20px;
+                    height: 3px;
+                    border-radius: 1.5px;
+                    background: Theme.accent.with-alpha(0.25);
+
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * root.prompt-progress;
+                        border-radius: 1.5px;
+                        background: Theme.accent;
+                    }
+                }
             }
             Hint {
                 visible: root.show-chrome && root.feedback-text != "";
@@ -770,7 +804,8 @@ export component Overlay inherits Window {
                         glyph-size: 13px;
                         active: root.session;
                         tooltip: root.session ? "Leave session mode  (Tab)" : "Session mode: place several annotations  (Tab)";
-                        clicked => { root.session-clicked(); }
+                        pressed => { root.session-pressed(); }
+                        released => { root.session-released(); }
                     }
                     if root.session: ModeButton {
                         width: 46px;

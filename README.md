@@ -88,9 +88,11 @@ Measurements stay on screen as annotations instead of being copied one at a time
 | `Ctrl+C`, or the `MD` button | Copy all annotations as a Markdown list |
 | `Ctrl+Z` or `Z` | Undo the last annotation |
 | `Ctrl+Shift+Z` | Redo |
-| `Tab`, `Esc` or `SESSION` | Leave session mode; with annotations placed, press again to confirm discarding them |
-| `Q` | Quit; with annotations placed, press again to confirm |
-| Closing the window (e.g. `Alt+F4`) | Quit; with annotations placed, close again to confirm |
+| `Tab`, `Esc` or `SESSION` | Leave session mode; with annotations placed, hold for a second to discard them |
+| `Q` | Quit; with annotations placed, hold for a second |
+| Closing the window (e.g. `Alt+F4`) | Quit; with annotations placed, hold `Alt+F4` where the system repeats it (e.g. Windows), else hold `Q` |
+
+While you hold one of these, a bar in the prompt fills. Let go before it is full and the annotations stay.
 
 When the annotations span several monitors, each Markdown line names its monitor (`on monitor 2`). Monitors are numbered from 1 by their top edge, highest first, then left to right among those at the same height.
 
