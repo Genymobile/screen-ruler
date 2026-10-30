@@ -7,7 +7,8 @@
 //! and bare X11 window managers usually do not) the clipboard empties the
 //! moment it dies. Because this tool's whole point is "measure, copy, quit",
 //! it prefers an external helper on Linux (`wl-copy`, `xclip`, `xsel`), since
-//! those fork a daemon that keeps the selection alive.
+//! those fork a daemon that keeps the selection alive. Without one, a text
+//! copy reports [`Copied::MayNotLast`], so the user can be warned.
 
 #[cfg(target_os = "linux")]
 use std::borrow::Cow;
@@ -26,15 +27,49 @@ use std::time::{Duration, Instant};
 
 use image::RgbaImage;
 
-/// Copies text to the clipboard.
-pub fn copy_text(text: &str) -> Result<(), String> {
+/// Whether a copy can be expected to outlive screen-ruler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Copied {
+    /// The system, or a helper's daemon, keeps the copy.
+    Lasting,
+    /// Linux without the session's helper (wl-copy on Wayland, xclip or xsel
+    /// on X11), where arboard serves the copy from this process. Unless a
+    /// clipboard manager takes it, it goes when screen-ruler quits, or on X11
+    /// as soon as the copy returns.
+    MayNotLast,
+}
+
+/// What to install so that copies outlive screen-ruler, after a
+/// [`Copied::MayNotLast`]: the package with this session's helper.
+pub fn install_hint() -> &'static str {
+    install_hint_for(crate::capture::is_wayland_session())
+}
+
+/// [`install_hint`] for a Wayland session or not, as [`copy_text`] picks its
+/// helpers.
+fn install_hint_for(wayland: bool) -> &'static str {
+    if wayland {
+        "install wl-clipboard"
+    } else {
+        "install xclip or xsel"
+    }
+}
+
+/// Copies text to the clipboard, and says whether the copy can be expected
+/// to outlive screen-ruler.
+pub fn copy_text(text: &str) -> Result<Copied, String> {
     #[cfg(target_os = "linux")]
     if let Some(result) = linux::copy(linux::Payload::Text, || Ok(Cow::Borrowed(text.as_bytes()))) {
-        return result;
+        return result.map(|()| Copied::Lasting);
     }
 
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard.set_text(text).map_err(|e| e.to_string())
+    clipboard.set_text(text).map_err(|e| e.to_string())?;
+    Ok(if cfg!(target_os = "linux") {
+        Copied::MayNotLast
+    } else {
+        Copied::Lasting
+    })
 }
 
 /// Copies an image to the clipboard.
@@ -253,6 +288,7 @@ mod linux {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    use super::install_hint_for;
     use super::linux::*;
     use image::{Rgba, RgbaImage};
     use std::os::unix::fs::PermissionsExt;
@@ -294,6 +330,12 @@ mod tests {
                 assert!(args.contains(&"image/png"), "{args:?}");
             }
         }
+    }
+
+    #[test]
+    fn the_install_hint_names_the_package_with_the_sessions_helper() {
+        assert_eq!(install_hint_for(true), "install wl-clipboard");
+        assert_eq!(install_hint_for(false), "install xclip or xsel");
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use ruler_core::analysis::Analysis;
-use ruler_core::clipboard;
+use ruler_core::clipboard::{self, Copied};
 use ruler_core::color::{KernelCache, Sample};
 use ruler_core::edges;
 use ruler_core::geometry::{Point, Rect};
@@ -601,9 +601,9 @@ impl App {
                     let _ = slint::quit_event_loop();
                 }
                 Command::CopyTextAndQuit(text) => {
-                    if let Err(e) = clipboard::copy_text(&text) {
-                        eprintln!("screen-ruler: could not copy to the clipboard: {e}");
-                    }
+                    // The windows close at once, before a message could be
+                    // read: problems only go to stderr.
+                    let _ = report_copy(clipboard::copy_text(&text));
                     // Also on stdout, so the measurement can be scripted.
                     println!("{text}");
                     let _ = slint::quit_event_loop();
@@ -615,9 +615,8 @@ impl App {
                         });
                 }
                 Command::CopyText(text) => {
-                    if let Err(e) = clipboard::copy_text(&text) {
-                        eprintln!("screen-ruler: could not copy to the clipboard: {e}");
-                        self.state.show_feedback("Could not copy to the clipboard");
+                    if let Some(message) = report_copy(clipboard::copy_text(&text)) {
+                        self.state.show_feedback(&message);
                     }
                 }
                 // Image export is not wired yet, and nothing reachable emits it.
@@ -991,6 +990,30 @@ fn wire(window: &Overlay, monitor: usize) {
         with_app(App::close_requested);
         slint::CloseRequestResponse::KeepWindowShown
     });
+}
+
+/// Logs the details of a clipboard copy to stderr, and returns the message
+/// to show on screen, if there is one.
+///
+/// Only a failed copy shows a message. A copy that may not last is a warning
+/// on stderr alone: a clipboard manager, such as GNOME's, often keeps it, and
+/// the app cannot tell, so on screen it would mostly be a false alarm.
+fn report_copy(result: Result<Copied, String>) -> Option<String> {
+    match result {
+        Ok(Copied::Lasting) => None,
+        Ok(Copied::MayNotLast) => {
+            eprintln!(
+                "screen-ruler: no clipboard helper found, so the copy may not stay \
+                 in the clipboard: it can go at once, or when screen-ruler quits; {}",
+                clipboard::install_hint()
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("screen-ruler: could not copy to the clipboard: {e}");
+            Some("Could not copy to the clipboard".to_string())
+        }
+    }
 }
 
 /// Updates `model` to `rows`, touching only the rows that changed.
@@ -1373,6 +1396,24 @@ mod tests {
         assert_eq!(lines[0], "#E6195E");
         assert_eq!(lines[1], "rgb(230, 25, 94)");
         assert!(lines[2].starts_with("hsl("), "{text}");
+    }
+
+    #[test]
+    fn a_lasting_copy_needs_no_message() {
+        assert_eq!(report_copy(Ok(Copied::Lasting)), None);
+    }
+
+    #[test]
+    fn a_copy_that_may_not_last_shows_no_message() {
+        assert_eq!(report_copy(Ok(Copied::MayNotLast)), None);
+    }
+
+    #[test]
+    fn a_failed_copy_says_so() {
+        assert_eq!(
+            report_copy(Err("no display".to_string())).as_deref(),
+            Some("Could not copy to the clipboard")
+        );
     }
 
     #[test]

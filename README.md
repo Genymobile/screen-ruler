@@ -24,7 +24,7 @@ Download the archive for your platform from the [releases page](https://github.c
 
 Each archive contains the `screen-ruler` binary and an install script that copies it to a directory of your choice and sets up a [global keyboard shortcut](#global-keyboard-shortcut). The binary also runs as is, without installing.
 
-On Linux the only runtime dependency is fontconfig, which every desktop distribution ships.
+On Linux the only runtime dependency is fontconfig, which every desktop distribution ships. For copies to stay in the clipboard, also install wl-clipboard (Wayland) or xclip or xsel (X11). Without one, a copy can be lost, as soon as it is made or when screen-ruler quits, unless the desktop runs a clipboard manager. screen-ruler then prints a warning to stderr.
 
 ## Build from source
 
