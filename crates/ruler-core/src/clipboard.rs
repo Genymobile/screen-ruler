@@ -7,8 +7,8 @@
 //! and bare X11 window managers usually do not) the clipboard empties the
 //! moment it dies. Because this tool's whole point is "measure, copy, quit",
 //! it prefers an external helper on Linux (`wl-copy`, `xclip`, `xsel`), since
-//! those fork a daemon that keeps the selection alive. Without one, a text
-//! copy reports [`Copied::MayNotLast`], so the user can be warned.
+//! those fork a daemon that keeps the selection alive. Without one, a copy
+//! reports [`Copied::MayNotLast`], so the user can be warned.
 
 #[cfg(target_os = "linux")]
 use std::borrow::Cow;
@@ -32,10 +32,10 @@ use image::RgbaImage;
 pub enum Copied {
     /// The system, or a helper's daemon, keeps the copy.
     Lasting,
-    /// Linux without the session's helper (wl-copy on Wayland, xclip or xsel
-    /// on X11), where arboard serves the copy from this process. Unless a
-    /// clipboard manager takes it, it goes when screen-ruler quits, or on X11
-    /// as soon as the copy returns.
+    /// Linux without the session's helper (wl-copy on Wayland; on X11 xclip,
+    /// or xsel for text only), where arboard serves the copy from this
+    /// process. Unless a clipboard manager takes it, it goes when screen-ruler
+    /// quits, or on X11 as soon as the copy returns.
     MayNotLast,
 }
 
@@ -72,15 +72,16 @@ pub fn copy_text(text: &str) -> Result<Copied, String> {
     })
 }
 
-/// Copies an image to the clipboard.
-pub fn copy_image(image: &RgbaImage) -> Result<(), String> {
+/// Copies an image to the clipboard, and says whether the copy can be
+/// expected to outlive screen-ruler, as [`copy_text`] does.
+pub fn copy_image(image: &RgbaImage) -> Result<Copied, String> {
     #[cfg(target_os = "linux")]
     // An encoding failure is reported rather than falling through to
     // arboard: a helper exists, so the copy belongs to it.
     if let Some(result) = linux::copy(linux::Payload::Png, || {
         linux::encode_png(image).map(Cow::Owned)
     }) {
-        return result;
+        return result.map(|()| Copied::Lasting);
     }
 
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
@@ -90,7 +91,12 @@ pub fn copy_image(image: &RgbaImage) -> Result<(), String> {
             height: image.height() as usize,
             bytes: std::borrow::Cow::Borrowed(image.as_raw()),
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(if cfg!(target_os = "linux") {
+        Copied::MayNotLast
+    } else {
+        Copied::Lasting
+    })
 }
 
 #[cfg(target_os = "linux")]
