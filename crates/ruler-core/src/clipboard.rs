@@ -178,7 +178,9 @@ mod linux {
     ///
     /// Returns `None` when the program is not installed, and `Some(Err(..))`
     /// when it exists but failed, so a failure (no display, say) is reported
-    /// instead of silently losing the copy.
+    /// instead of silently losing the copy. A helper still running at the
+    /// timeout with the whole payload is left running, and reaped when it
+    /// exits.
     pub(super) fn pipe_to(
         program: &str,
         args: &[&str],
@@ -253,8 +255,15 @@ mod linux {
                     std::thread::sleep(Duration::from_millis(2));
                 }
                 // Still running with the whole payload delivered: it is
-                // serving the selection in the foreground.
-                Ok(None) if stdin.is_none() && write_error.is_none() => return Some(Ok(())),
+                // serving the selection in the foreground, so it is left
+                // running and a thread reaps it when it exits. A failed
+                // spawn only leaves it unreaped, rather than panicking.
+                Ok(None) if stdin.is_none() && write_error.is_none() => {
+                    let _ = std::thread::Builder::new()
+                        .name("clipboard-reaper".into())
+                        .spawn(move || child.wait());
+                    return Some(Ok(()));
+                }
                 Ok(None) => {
                     drop(stdin);
                     let _ = child.kill();
@@ -364,6 +373,68 @@ mod tests {
         let result = pipe_to("sh", &["-c", "cat > /dev/null; sleep 5"], b"payload", SHORT);
         assert_eq!(result, Some(Ok(())));
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    /// Polls `condition` every few milliseconds until it holds or `timeout`
+    /// ends, and says whether it held.
+    fn eventually(timeout: Duration, condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        condition()
+    }
+
+    #[test]
+    fn a_helper_left_in_the_foreground_is_reaped_when_it_exits() {
+        let pid_file =
+            std::env::temp_dir().join(format!("screen-ruler-reaped-{}", std::process::id()));
+        let _ = std::fs::remove_file(&pid_file);
+        let pid_path = pid_file.to_str().expect("UTF-8 temp path");
+        // `$0` is the first argument after the script: the PID file.
+        let script = r#"echo $$ > "$0"; cat > /dev/null; sleep 1"#;
+        let result = pipe_to("sh", &["-c", script, pid_path], b"payload", SHORT);
+        assert_eq!(result, Some(Ok(())));
+
+        // On a loaded machine the helper may not have written its PID yet.
+        let read_pid = || {
+            std::fs::read_to_string(&pid_file)
+                .ok()?
+                .trim()
+                .parse::<u32>()
+                .ok()
+        };
+        assert!(
+            eventually(Duration::from_secs(5), || read_pid().is_some()),
+            "helper never wrote its PID"
+        );
+        let pid = read_pid().expect("a PID");
+        let _ = std::fs::remove_file(&pid_file);
+        // A zombie keeps its /proc entry until it is reaped.
+        let proc_entry = std::path::PathBuf::from(format!("/proc/{pid}"));
+        assert!(
+            eventually(Duration::from_secs(5), || !proc_entry.exists()),
+            "helper {pid} was not reaped"
+        );
+    }
+
+    #[test]
+    fn a_helper_left_in_the_foreground_is_not_killed() {
+        let marker =
+            std::env::temp_dir().join(format!("screen-ruler-not-killed-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let marker_path = marker.to_str().expect("UTF-8 temp path");
+        // `$0` is the first argument after the script: the marker file.
+        let script = r#"cat > /dev/null; sleep 1; touch "$0""#;
+        let result = pipe_to("sh", &["-c", script, marker_path], b"payload", SHORT);
+        assert_eq!(result, Some(Ok(())));
+
+        let survived = eventually(Duration::from_secs(5), || marker.exists());
+        let _ = std::fs::remove_file(&marker);
+        assert!(survived, "helper was killed before it could finish");
     }
 
     #[test]
