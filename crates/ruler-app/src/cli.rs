@@ -98,8 +98,8 @@ KEYS
     Wheel          Adjust the active mode's control
     Tab            Toggle session mode, where measurements stay on screen:
                    click or drag places one, Ctrl+C copies them all as
-                   Markdown, Ctrl+Z or Z undoes, Ctrl+Shift+Z redoes,
-                   Tab or Esc leaves it
+                   Markdown and quits, Ctrl+Z or Z undoes,
+                   Ctrl+Shift+Z redoes, Tab or Esc leaves it
     ? or H         Toggle the shortcut overlay
     Esc / Q        Quit; in session mode, Esc leaves the session first
 ",
@@ -245,6 +245,12 @@ mod tests {
         ] {
             assert!(usage.contains(keys), "missing {keys:?}:\n{usage}");
         }
+    }
+
+    #[test]
+    fn the_help_text_says_a_session_copy_quits() {
+        let usage = usage();
+        assert!(usage.contains("Markdown and quits"), "{usage}");
     }
 
     #[test]

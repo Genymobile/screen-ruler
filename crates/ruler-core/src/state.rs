@@ -441,10 +441,10 @@ impl Hold {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Quit,
-    /// Copy text, then quit. Used by the "measure and go" quick flow.
+    /// Copy text, then quit. Used by the "measure and go" quick flow and by
+    /// the session's Markdown copy. A copy that fails in a session does not
+    /// quit, so the annotations are not lost.
     CopyTextAndQuit(String),
-    /// Copy text and stay open. Used by session-mode Markdown export.
-    CopyText(String),
     /// Composite the given region of a monitor with its annotations and copy it.
     CopyRegionImage(Rect),
     /// Edge thresholds changed; re-analyse every monitor.
@@ -765,19 +765,15 @@ impl RulerState {
             .join("\n")
     }
 
-    /// Copies all annotations as Markdown, keeping the session open.
+    /// Copies all annotations as Markdown, then quits, as a quick-mode copy
+    /// does. With no annotations it only says so, and the session stays open.
     pub fn copy_annotations(&mut self) {
         let markdown = self.annotations_markdown();
         if markdown.is_empty() {
             self.show_feedback("No annotations to copy");
             return;
         }
-        self.push(Command::CopyText(markdown));
-        let count = self.annotations.len();
-        self.show_feedback(&format!(
-            "Copied {count} annotation{}",
-            if count == 1 { "" } else { "s" }
-        ));
+        self.push(Command::CopyTextAndQuit(markdown));
     }
 
     // ------------------------------------------------------------- session
@@ -2075,6 +2071,32 @@ mod tests {
         assert_eq!(
             s.take_commands(),
             vec![Command::CopyTextAndQuit("100 × 50 px".to_string())]
+        );
+    }
+
+    #[test]
+    fn copying_the_annotations_copies_them_and_quits() {
+        let mut s = state();
+        s.set_session(true);
+        s.add_annotation(Annotation::test_rect(12.0, 34.0, 100.0, 50.0));
+        s.copy_annotations();
+        assert_eq!(
+            s.take_commands(),
+            vec![Command::CopyTextAndQuit(
+                "- Rectangle @ (12, 34): 100 × 50 px".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn copying_no_annotations_says_so_and_stays_open() {
+        let mut s = state();
+        s.set_session(true);
+        s.copy_annotations();
+        assert!(s.take_commands().is_empty());
+        assert_eq!(
+            s.feedback_message().as_deref(),
+            Some("No annotations to copy")
         );
     }
 

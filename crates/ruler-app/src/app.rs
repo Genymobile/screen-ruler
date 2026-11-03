@@ -479,8 +479,8 @@ impl App {
         self.render();
     }
 
-    /// Copies every annotation as Markdown: the MD button, and Ctrl+C in a
-    /// session.
+    /// Copies every annotation as Markdown, then quits: the MD button, and
+    /// Ctrl+C in a session.
     fn copy_markdown(&mut self) {
         self.state.cancel_hold();
         self.state.copy_annotations();
@@ -628,23 +628,24 @@ impl App {
                     let _ = slint::quit_event_loop();
                 }
                 Command::CopyTextAndQuit(text) => {
-                    // The windows close at once, before a message could be
-                    // read: problems only go to stderr.
-                    let _ = report_copy(clipboard::copy_text(&text));
-                    // Also on stdout, so the measurement can be scripted.
-                    println!("{text}");
-                    let _ = slint::quit_event_loop();
+                    let failure = report_copy(clipboard::copy_text(&text));
+                    match stay_open_message(failure, self.state.session) {
+                        Some(message) => self.state.show_feedback(&message),
+                        None => {
+                            // Print the text, so the measurement can be
+                            // scripted, and quit. On a quick-mode failure the
+                            // windows close before a message could be read, so
+                            // problems only go to stderr.
+                            println!("{text}");
+                            let _ = slint::quit_event_loop();
+                        }
+                    }
                 }
                 Command::Recompute => {
                     self.recompute_timer
                         .start(TimerMode::SingleShot, analysis::DEBOUNCE, || {
                             with_app(App::analyse)
                         });
-                }
-                Command::CopyText(text) => {
-                    if let Some(message) = report_copy(clipboard::copy_text(&text)) {
-                        self.state.show_feedback(&message);
-                    }
                 }
                 // Image export is not wired yet, and nothing reachable emits it.
                 Command::CopyRegionImage(_) => {}
@@ -1056,6 +1057,16 @@ fn report_copy(result: Result<Copied, String>) -> Option<String> {
     }
 }
 
+/// The message to show if a copy keeps the app open, given the on-screen
+/// message `report_copy` returned for it; `None` means the copy quits.
+///
+/// Every copy quits, except one that failed in a session: that stays open
+/// with the message, so the annotations are not lost and the copy can be
+/// retried. A failure in quick mode still quits, as there is nothing to lose.
+fn stay_open_message(failure: Option<String>, session: bool) -> Option<String> {
+    failure.filter(|_| session)
+}
+
 /// Updates `model` to `rows`, touching only the rows that changed.
 fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
     if model.row_count() != rows.len() {
@@ -1093,7 +1104,7 @@ fn help_lines(mode: Mode, session: bool) -> Vec<SharedString> {
     };
     let (copy, undo_or_session, leave) = if session {
         (
-            "Ctrl+C — copy all annotations as Markdown",
+            "Ctrl+C — copy all annotations as Markdown, then quit",
             "Ctrl+Z or Z — undo  ·  Ctrl+Shift+Z — redo",
             "Tab or Esc — leave session mode  ·  Q — quit",
         )
@@ -1457,6 +1468,39 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_session_copy_stays_open_with_its_message() {
+        let failure = report_copy(Err("no display".to_string()));
+        assert_eq!(
+            stay_open_message(failure, true).as_deref(),
+            Some("Could not copy to the clipboard")
+        );
+    }
+
+    #[test]
+    fn a_session_copy_that_may_not_last_still_quits() {
+        let failure = report_copy(Ok(Copied::MayNotLast));
+        assert_eq!(stay_open_message(failure, true), None);
+    }
+
+    #[test]
+    fn a_failed_quick_copy_quits() {
+        let failure = report_copy(Err("no display".to_string()));
+        assert_eq!(stay_open_message(failure, false), None);
+    }
+
+    #[test]
+    fn a_successful_copy_quits() {
+        for session in [false, true] {
+            let failure = report_copy(Ok(Copied::Lasting));
+            assert_eq!(
+                stay_open_message(failure, session),
+                None,
+                "session: {session}"
+            );
+        }
+    }
+
+    #[test]
     fn the_help_says_what_a_click_does_in_each_mode() {
         let quick = help_lines(Mode::Crosshair, false);
         assert!(quick.iter().any(|l| l.contains("then quit")));
@@ -1464,12 +1508,27 @@ mod tests {
 
         for mode in Mode::ALL {
             let session = help_lines(mode, true);
+            let click = session
+                .iter()
+                .find(|l| l.starts_with("Click") || l.starts_with("Drag"))
+                .expect("a click line");
             assert!(
-                !session.iter().any(|l| l.contains("then quit")),
+                !click.contains("then quit"),
                 "{mode:?}: nothing quits on a click in a session: {session:?}"
             );
             assert!(session.iter().any(|l| l.contains("undo")), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn the_session_help_says_a_copy_quits() {
+        let session = help_lines(Mode::Crosshair, true);
+        assert!(
+            session
+                .iter()
+                .any(|l| l.starts_with("Ctrl+C") && l.ends_with("then quit")),
+            "{session:?}"
+        );
     }
 
     #[test]
