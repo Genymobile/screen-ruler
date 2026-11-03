@@ -567,6 +567,11 @@ export component Overlay inherits Window {
     // How much of a discard has been held, from 0 to 1, for the bar in the
     // prompt.
     in property <float> prompt-progress;
+    // The image export is waiting for a drag or a click, which lights IMG.
+    in property <bool> export-armed;
+    // Set while the image export takes its snapshot: only the screenshot and
+    // the placed annotations are drawn.
+    in property <bool> snapshot;
 
     // Chrome, only on the monitor the pointer is on.
     in property <bool> show-chrome;
@@ -585,6 +590,7 @@ export component Overlay inherits Window {
     callback session-pressed();
     callback session-released();
     callback markdown-clicked();
+    callback image-clicked();
 
     callback pointer-moved(length, length);
     callback pointer-pressed(length, length);
@@ -648,7 +654,7 @@ export component Overlay inherits Window {
                 image-fit: fill;
                 image-rendering: pixelated;
                 opacity: root.edges-opacity;
-                visible: root.edges-opacity > 0;
+                visible: root.edges-opacity > 0 && !root.snapshot;
             }
 
             // Placed annotations, under the live marks.
@@ -658,177 +664,197 @@ export component Overlay inherits Window {
                 mark: mark;
             }
 
-            if root.session: SessionBorder {
-                width: 100%;
-                height: 100%;
-                hovered: canvas.has-hover;
-                pointer-x: canvas.mouse-x;
-                pointer-y: canvas.mouse-y;
-            }
-
-            // Sized to the window: a zero-size element would have its
-            // children culled from redraws.
-            if root.show-crosshair: Crosshair {
-                width: 100%;
-                height: 100%;
-                cx: root.cursor-x;
-                cy: root.cursor-y;
-                rays: root.rays;
-            }
-
-            Outline {
-                visible: root.show-rect;
-                animated: root.rect-animated;
-                x: root.rect-x;
-                y: root.rect-y;
-                width: max(1px, root.rect-width);
-                height: max(1px, root.rect-height);
-            }
-
-            if root.show-snap: SnapMarker {
-                width: 100%;
-                height: 100%;
-                cx: root.snap-x;
-                cy: root.snap-y;
-                snapped: root.snap-snapped;
-            }
-
-            if root.show-color: ColorMarker {
-                width: 100%;
-                height: 100%;
-                cx: root.color-x;
-                cy: root.color-y;
-                radius: root.color-radius;
-            }
-
-            if root.show-distance: Distance {
-                width: 100%;
-                height: 100%;
-                ax: root.distance-ax;
-                ay: root.distance-ay;
-                bx: root.distance-bx;
-                by: root.distance-by;
-                show-legs: root.distance-legs;
-                dx: root.distance-dx;
-                dy: root.distance-dy;
-            }
-
-            Chip {
-                text: root.chip-text;
-                anchor-x: root.chip-x;
-                anchor-y: root.chip-y;
-                offset-x: root.chip-offset-x;
-                offset-y: root.chip-offset-y;
-                canvas-width: root.width;
-                canvas-height: root.height;
-            }
-
-            if root.show-color: ColorBubble {
-                swatch: root.color-swatch;
-                text: root.color-text;
-                anchor-x: root.color-x;
-                anchor-y: root.color-y;
-                canvas-width: root.width;
-                canvas-height: root.height;
-            }
-
-            Hint {
-                text: root.hint-text;
-                y: root.height - self.height - 48px;
-            }
-
-            // The prompt in the middle, feedback just below it when both show.
-            prompt := Hint {
-                visible: root.show-chrome && root.prompt-text != "";
-                text: root.prompt-text;
-                font-size: 18px;
-                y: (root.height - self.height) / 2;
-
-                // The hold bar, in the bottom padding: the track, then the
-                // fill, which the Rust side moves on every frame of a hold.
-                Rectangle {
-                    x: 10px;
-                    y: parent.height - 7px;
-                    width: parent.width - 20px;
-                    height: 3px;
-                    border-radius: 1.5px;
-                    background: Theme.accent.with-alpha(0.25);
-
-                    Rectangle {
-                        x: 0;
-                        width: parent.width * root.prompt-progress;
-                        border-radius: 1.5px;
-                        background: Theme.accent;
-                    }
-                }
-            }
-            Hint {
-                visible: root.show-chrome && root.feedback-text != "";
-                text: root.feedback-text;
-                font-size: 16px;
-                y: (root.height - self.height) / 2 + (root.prompt-text != "" ? prompt.height + 12px : 0);
-            }
-
-            panel := Panel {
-                visible: root.show-chrome;
-                x: (root.width - self.width) / 2;
-                y: 14px;
-                mode: root.mode;
-                mode-tooltips: root.mode-tooltips;
-                dials: root.dials;
-                mode-clicked(index) => { root.mode-clicked(index); }
-                dial-changed(index, value) => { root.dial-changed(index, value); }
-                help-visible: root.help-visible;
-                help-clicked => { root.help-clicked(); }
-            }
-
-            // Session controls in the top-left corner, apart from the
-            // measurement panel: SESSION, then MD while a session is on.
+            // Everything above the annotations, hidden from the image export's
+            // snapshot. Full size at the origin, so nothing inside moves.
             Rectangle {
-                visible: root.show-chrome;
-                x: 14px;
-                y: 14px;
-                width: session-row.preferred-width;
-                height: session-row.preferred-height;
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: !root.snapshot;
 
-                // Behind the buttons: swallows clicks in the gap between them.
-                TouchArea { }
+                if root.session: SessionBorder {
+                    width: 100%;
+                    height: 100%;
+                    hovered: canvas.has-hover;
+                    pointer-x: canvas.mouse-x;
+                    pointer-y: canvas.mouse-y;
+                }
 
-                session-row := HorizontalLayout {
-                    spacing: 8px;
+                // Sized to the window: a zero-size element would have its
+                // children culled from redraws.
+                if root.show-crosshair: Crosshair {
+                    width: 100%;
+                    height: 100%;
+                    cx: root.cursor-x;
+                    cy: root.cursor-y;
+                    rays: root.rays;
+                }
 
-                    ModeButton {
-                        width: 96px;
-                        mode: -1;
-                        glyph: "SESSION";
-                        glyph-size: 13px;
-                        active: root.session;
-                        tooltip: root.session ? "Leave session mode  (Tab)" : "Session mode: place several annotations  (Tab)";
-                        pressed => { root.session-pressed(); }
-                        released => { root.session-released(); }
-                    }
-                    if root.session: ModeButton {
-                        width: 46px;
-                        mode: -1;
-                        glyph: "MD";
-                        glyph-size: 13px;
-                        tooltip: "Copy all annotations as Markdown, then quit  (Ctrl+C)";
-                        clicked => { root.markdown-clicked(); }
+                Outline {
+                    visible: root.show-rect;
+                    animated: root.rect-animated;
+                    x: root.rect-x;
+                    y: root.rect-y;
+                    width: max(1px, root.rect-width);
+                    height: max(1px, root.rect-height);
+                }
+
+                if root.show-snap: SnapMarker {
+                    width: 100%;
+                    height: 100%;
+                    cx: root.snap-x;
+                    cy: root.snap-y;
+                    snapped: root.snap-snapped;
+                }
+
+                if root.show-color: ColorMarker {
+                    width: 100%;
+                    height: 100%;
+                    cx: root.color-x;
+                    cy: root.color-y;
+                    radius: root.color-radius;
+                }
+
+                if root.show-distance: Distance {
+                    width: 100%;
+                    height: 100%;
+                    ax: root.distance-ax;
+                    ay: root.distance-ay;
+                    bx: root.distance-bx;
+                    by: root.distance-by;
+                    show-legs: root.distance-legs;
+                    dx: root.distance-dx;
+                    dy: root.distance-dy;
+                }
+
+                Chip {
+                    text: root.chip-text;
+                    anchor-x: root.chip-x;
+                    anchor-y: root.chip-y;
+                    offset-x: root.chip-offset-x;
+                    offset-y: root.chip-offset-y;
+                    canvas-width: root.width;
+                    canvas-height: root.height;
+                }
+
+                if root.show-color: ColorBubble {
+                    swatch: root.color-swatch;
+                    text: root.color-text;
+                    anchor-x: root.color-x;
+                    anchor-y: root.color-y;
+                    canvas-width: root.width;
+                    canvas-height: root.height;
+                }
+
+                Hint {
+                    text: root.hint-text;
+                    y: root.height - self.height - 48px;
+                }
+
+                // The prompt in the middle, feedback just below it when both show.
+                prompt := Hint {
+                    visible: root.show-chrome && root.prompt-text != "";
+                    text: root.prompt-text;
+                    font-size: 18px;
+                    y: (root.height - self.height) / 2;
+
+                    // The hold bar, in the bottom padding: the track, then the
+                    // fill, which the Rust side moves on every frame of a hold.
+                    Rectangle {
+                        x: 10px;
+                        y: parent.height - 7px;
+                        width: parent.width - 20px;
+                        height: 3px;
+                        border-radius: 1.5px;
+                        background: Theme.accent.with-alpha(0.25);
+
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * root.prompt-progress;
+                            border-radius: 1.5px;
+                            background: Theme.accent;
+                        }
                     }
                 }
-            }
+                Hint {
+                    visible: root.show-chrome && root.feedback-text != "";
+                    text: root.feedback-text;
+                    font-size: 16px;
+                    y: (root.height - self.height) / 2 + (root.prompt-text != "" ? prompt.height + 12px : 0);
+                }
 
-            Help {
-                visible: root.show-chrome && root.help-opacity > 0.01;
-                opacity: root.help-opacity;
-                x: panel.x;
-                y: panel.y + panel.height + 10px;
-                width: panel.width;
-                lines: root.help-lines;
-                pointer-inside: canvas.has-hover
-                    && canvas.mouse-x >= self.x && canvas.mouse-x < self.x + self.width
-                    && canvas.mouse-y >= self.y && canvas.mouse-y < self.y + self.height;
-                hovered => { root.help-hovered(); }
+                panel := Panel {
+                    visible: root.show-chrome;
+                    x: (root.width - self.width) / 2;
+                    y: 14px;
+                    mode: root.mode;
+                    mode-tooltips: root.mode-tooltips;
+                    dials: root.dials;
+                    mode-clicked(index) => { root.mode-clicked(index); }
+                    dial-changed(index, value) => { root.dial-changed(index, value); }
+                    help-visible: root.help-visible;
+                    help-clicked => { root.help-clicked(); }
+                }
+
+                // Session controls in the top-left corner, apart from the
+                // measurement panel: SESSION, then MD and IMG while a session is
+                // on.
+                Rectangle {
+                    visible: root.show-chrome;
+                    x: 14px;
+                    y: 14px;
+                    width: session-row.preferred-width;
+                    height: session-row.preferred-height;
+
+                    // Behind the buttons: swallows clicks in the gap between them.
+                    TouchArea { }
+
+                    session-row := HorizontalLayout {
+                        spacing: 8px;
+
+                        ModeButton {
+                            width: 96px;
+                            mode: -1;
+                            glyph: "SESSION";
+                            glyph-size: 13px;
+                            active: root.session;
+                            tooltip: root.session ? "Leave session mode  (Tab)" : "Session mode: place several annotations  (Tab)";
+                            pressed => { root.session-pressed(); }
+                            released => { root.session-released(); }
+                        }
+                        if root.session: ModeButton {
+                            width: 46px;
+                            mode: -1;
+                            glyph: "MD";
+                            glyph-size: 13px;
+                            tooltip: "Copy all annotations as Markdown, then quit  (Ctrl+C)";
+                            clicked => { root.markdown-clicked(); }
+                        }
+                        if root.session: ModeButton {
+                            width: 46px;
+                            mode: -1;
+                            glyph: "IMG";
+                            glyph-size: 13px;
+                            active: root.export-armed;
+                            tooltip: "Drag a region or click a screen to copy it as an image, then quit  (Ctrl+Shift+C)";
+                            clicked => { root.image-clicked(); }
+                        }
+                    }
+                }
+
+                Help {
+                    visible: root.show-chrome && root.help-opacity > 0.01;
+                    opacity: root.help-opacity;
+                    x: panel.x;
+                    y: panel.y + panel.height + 10px;
+                    width: panel.width;
+                    lines: root.help-lines;
+                    pointer-inside: canvas.has-hover
+                        && canvas.mouse-x >= self.x && canvas.mouse-x < self.x + self.width
+                        && canvas.mouse-y >= self.y && canvas.mouse-y < self.y + self.height;
+                    hovered => { root.help-hovered(); }
+                }
             }
         }
     }

@@ -39,19 +39,29 @@ pub enum Copied {
     MayNotLast,
 }
 
-/// What to install so that copies outlive screen-ruler, after a
-/// [`Copied::MayNotLast`]: the package with this session's helper.
-pub fn install_hint() -> &'static str {
-    install_hint_for(crate::capture::is_wayland_session())
+/// What a copy puts on the clipboard, which decides the helpers that can
+/// take it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Payload {
+    Text,
+    /// An image, handed to the helpers as PNG.
+    Png,
 }
 
-/// [`install_hint`] for a Wayland session or not, as [`copy_text`] picks its
+/// What to install so that copies of `payload` outlive screen-ruler, after
+/// a [`Copied::MayNotLast`]: the package with this session's helper.
+pub fn install_hint(payload: Payload) -> &'static str {
+    install_hint_for(payload, crate::capture::is_wayland_session())
+}
+
+/// [`install_hint`] for a Wayland session or not, as the copies pick their
 /// helpers.
-fn install_hint_for(wayland: bool) -> &'static str {
-    if wayland {
-        "install wl-clipboard"
-    } else {
-        "install xclip or xsel"
+fn install_hint_for(payload: Payload, wayland: bool) -> &'static str {
+    match (payload, wayland) {
+        (_, true) => "install wl-clipboard",
+        (Payload::Text, false) => "install xclip or xsel",
+        // xsel cannot declare a MIME type, so it cannot copy an image.
+        (Payload::Png, false) => "install xclip",
     }
 }
 
@@ -59,7 +69,7 @@ fn install_hint_for(wayland: bool) -> &'static str {
 /// to outlive screen-ruler.
 pub fn copy_text(text: &str) -> Result<Copied, String> {
     #[cfg(target_os = "linux")]
-    if let Some(result) = linux::copy(linux::Payload::Text, || Ok(Cow::Borrowed(text.as_bytes()))) {
+    if let Some(result) = linux::copy(Payload::Text, || Ok(Cow::Borrowed(text.as_bytes()))) {
         return result.map(|()| Copied::Lasting);
     }
 
@@ -78,9 +88,7 @@ pub fn copy_image(image: &RgbaImage) -> Result<Copied, String> {
     #[cfg(target_os = "linux")]
     // An encoding failure is reported rather than falling through to
     // arboard: a helper exists, so the copy belongs to it.
-    if let Some(result) = linux::copy(linux::Payload::Png, || {
-        linux::encode_png(image).map(Cow::Owned)
-    }) {
+    if let Some(result) = linux::copy(Payload::Png, || linux::encode_png(image).map(Cow::Owned)) {
         return result.map(|()| Copied::Lasting);
     }
 
@@ -123,12 +131,6 @@ mod linux {
     /// a few milliseconds; one still running after this is assumed to be
     /// serving the selection in the foreground.
     const FORK_TIMEOUT: Duration = Duration::from_secs(2);
-
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    pub(super) enum Payload {
-        Text,
-        Png,
-    }
 
     /// One clipboard helper: the program to run and the arguments it needs.
     pub(super) type Helper = (&'static str, &'static [&'static str]);
@@ -294,8 +296,8 @@ mod linux {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::install_hint_for;
     use super::linux::*;
+    use super::{install_hint_for, Payload};
     use image::{Rgba, RgbaImage};
     use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, Instant};
@@ -340,8 +342,20 @@ mod tests {
 
     #[test]
     fn the_install_hint_names_the_package_with_the_sessions_helper() {
-        assert_eq!(install_hint_for(true), "install wl-clipboard");
-        assert_eq!(install_hint_for(false), "install xclip or xsel");
+        assert_eq!(
+            install_hint_for(Payload::Text, true),
+            "install wl-clipboard"
+        );
+        assert_eq!(
+            install_hint_for(Payload::Text, false),
+            "install xclip or xsel"
+        );
+    }
+
+    #[test]
+    fn the_install_hint_for_an_image_names_only_a_helper_that_copies_images() {
+        assert_eq!(install_hint_for(Payload::Png, true), "install wl-clipboard");
+        assert_eq!(install_hint_for(Payload::Png, false), "install xclip");
     }
 
     #[test]

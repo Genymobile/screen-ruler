@@ -15,6 +15,7 @@ slint::slint! {
 mod analysis;
 mod app;
 mod cli;
+mod export;
 mod input;
 mod placement;
 mod surface;
