@@ -65,8 +65,11 @@ struct OutputInfo {
     scale: i32,
     /// Physical mode size in device pixels, unrotated.
     mode: (i32, i32),
-    /// True when the output's transform turns it on its side.
-    rotated: bool,
+    /// The transform the compositor applies to the content to fit the panel.
+    /// A captured buffer arrives in the panel's native orientation, and
+    /// [`undo_output_transform`] turns it back. `Normal` when the compositor
+    /// sends a value this build does not know.
+    transform: wl_output::Transform,
     /// Logical position and size from `xdg_output`, which, unlike
     /// `mode / scale`, accounts for rotation and fractional scaling.
     logical_position: Option<(i32, i32)>,
@@ -81,14 +84,15 @@ impl OutputInfo {
     /// This output's logical rectangle, in on-screen orientation.
     fn layout(&self) -> OutputLayout {
         let scale = self.scale.max(1);
+        let on_its_side = swaps_axes(self.transform);
         let (width, height) = (self.mode.0 / scale, self.mode.1 / scale);
-        let fallback = if self.rotated {
+        let fallback = if on_its_side {
             (height, width)
         } else {
             (width, height)
         };
         let (mode_w, mode_h) = (self.mode.0.max(0) as u32, self.mode.1.max(0) as u32);
-        let oriented = if self.rotated {
+        let oriented = if on_its_side {
             (mode_h, mode_w)
         } else {
             (mode_w, mode_h)
@@ -235,21 +239,16 @@ fn capture_output(
 
     let image = to_rgba(&raw, spec, y_invert)
         .ok_or_else(|| format!("{name}: unsupported pixel format {:?}", spec.format))?;
+    // Freed before the transform, which may allocate another whole frame.
+    drop(raw);
+    let image = undo_output_transform(image, info.transform);
 
     // Position and scale come from the logical layout (`xdg_output` when the
     // compositor has it), which unlike `wl_output.geometry` times the integer
-    // scale stays right under fractional scaling. The captured buffer is in
-    // the output's unrotated orientation, so under a 90/270 rotation its
-    // width spans the logical *height*.
-    //
-    // Known gap: the image itself is not rotated to match the screen yet.
+    // scale stays right under fractional scaling. The image is in on-screen
+    // orientation by now, so its width spans the logical width.
     let layout = info.layout();
-    let logical_extent = if info.rotated {
-        layout.size.1
-    } else {
-        layout.size.0
-    };
-    let scale = derive_scale(logical_extent, info.scale, image.width());
+    let scale = derive_scale(layout.size.0, info.scale, image.width());
     let to_device = |logical: i32| (logical as f32 * scale).round() as i32;
 
     Ok(CapturedMonitor {
@@ -349,6 +348,52 @@ fn swaps_axes(transform: wl_output::Transform) -> bool {
         transform,
         Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270
     )
+}
+
+/// Turns a captured buffer from the panel's native orientation back into the
+/// orientation the user sees on screen.
+///
+/// The compositor applies the output's `transform` to the content to fit the
+/// panel. `wayland.xml` names the plain turns counter-clockwise, so they are
+/// undone with the clockwise `imageops::rotate*` by the same angle.
+///
+/// The flipped quarter turns follow the `libwayshot` crate, a wlroots
+/// screencopy client: flip horizontally, then turn clockwise. Inverting the
+/// transform as `wayland.xml` describes it (turn clockwise, then flip) would
+/// instead mirror `Flipped90` and `Flipped270` across the opposite diagonal.
+/// `Flipped` and `Flipped180` come out the same either way.
+///
+/// It runs on the output of [`to_rgba`], which has already undone `y_invert`.
+/// The order matters: undoing `y_invert` after a quarter turn instead would
+/// leave a 90 or 270 output upside down.
+fn undo_output_transform(mut image: RgbaImage, transform: wl_output::Transform) -> RgbaImage {
+    use image::imageops::{
+        flip_horizontal_in_place, flip_vertical_in_place, rotate180, rotate270, rotate90,
+    };
+    use wl_output::Transform;
+    match transform {
+        Transform::_90 => rotate90(&image),
+        Transform::_180 => rotate180(&image),
+        Transform::_270 => rotate270(&image),
+        Transform::Flipped => {
+            flip_horizontal_in_place(&mut image);
+            image
+        }
+        Transform::Flipped90 => {
+            flip_horizontal_in_place(&mut image);
+            rotate90(&image)
+        }
+        Transform::Flipped180 => {
+            flip_vertical_in_place(&mut image); // A horizontal flip plus a half turn.
+            image
+        }
+        Transform::Flipped270 => {
+            flip_horizontal_in_place(&mut image);
+            rotate270(&image)
+        }
+        // `Normal`, and any value a newer protocol adds.
+        _ => image,
+    }
 }
 
 /// Creates a sized, unlinked file in a tmpfs to back the shm pool.
@@ -473,7 +518,7 @@ impl Dispatch<WlRegistry, ()> for State {
                     position: (0, 0),
                     scale: 1,
                     mode: (0, 0),
-                    rotated: false,
+                    transform: wl_output::Transform::Normal,
                     logical_position: None,
                     logical_size: None,
                 });
@@ -500,7 +545,9 @@ impl Dispatch<WlOutput, ()> for State {
                 x, y, transform, ..
             } => {
                 info.position = (x, y);
-                info.rotated = matches!(transform, WEnum::Value(t) if swaps_axes(t));
+                info.transform = transform
+                    .into_result()
+                    .unwrap_or(wl_output::Transform::Normal);
             }
             wl_output::Event::Scale { factor } => info.scale = factor.max(1),
             wl_output::Event::Name { name } => info.name = Some(name),
@@ -772,6 +819,80 @@ mod tests {
         assert!(!swaps_axes(Transform::Flipped));
         assert!(swaps_axes(Transform::_90));
         assert!(swaps_axes(Transform::Flipped270));
+    }
+
+    /// A 3×2 capture whose red channel numbers the pixels in reading order:
+    ///
+    /// ```text
+    /// 1 2 3
+    /// 4 5 6
+    /// ```
+    fn numbered_capture() -> RgbaImage {
+        RgbaImage::from_fn(3, 2, |x, y| image::Rgba([(y * 3 + x + 1) as u8, 0, 0, 255]))
+    }
+
+    /// The red channel of `image`, row by row, top to bottom.
+    fn red_rows(image: &RgbaImage) -> Vec<Vec<u8>> {
+        image
+            .rows()
+            .map(|row| row.map(|pixel| pixel.0[0]).collect())
+            .collect()
+    }
+
+    fn undone(transform: wl_output::Transform) -> Vec<Vec<u8>> {
+        red_rows(&undo_output_transform(numbered_capture(), transform))
+    }
+
+    #[test]
+    fn a_normal_output_is_left_as_captured() {
+        assert_eq!(undone(wl_output::Transform::Normal), [[1, 2, 3], [4, 5, 6]]);
+    }
+
+    #[test]
+    fn a_90_output_is_turned_back_clockwise() {
+        assert_eq!(undone(wl_output::Transform::_90), [[4, 1], [5, 2], [6, 3]]);
+    }
+
+    #[test]
+    fn a_270_output_is_turned_back_counter_clockwise() {
+        assert_eq!(undone(wl_output::Transform::_270), [[3, 6], [2, 5], [1, 4]]);
+    }
+
+    #[test]
+    fn a_180_output_is_turned_half_way_round() {
+        assert_eq!(undone(wl_output::Transform::_180), [[6, 5, 4], [3, 2, 1]]);
+    }
+
+    #[test]
+    fn a_flipped_output_is_mirrored_left_to_right() {
+        assert_eq!(
+            undone(wl_output::Transform::Flipped),
+            [[3, 2, 1], [6, 5, 4]]
+        );
+    }
+
+    #[test]
+    fn a_flipped_180_output_is_mirrored_top_to_bottom() {
+        assert_eq!(
+            undone(wl_output::Transform::Flipped180),
+            [[4, 5, 6], [1, 2, 3]]
+        );
+    }
+
+    #[test]
+    fn a_flipped_90_output_is_mirrored_across_the_other_diagonal() {
+        assert_eq!(
+            undone(wl_output::Transform::Flipped90),
+            [[6, 3], [5, 2], [4, 1]]
+        );
+    }
+
+    #[test]
+    fn a_flipped_270_output_is_mirrored_across_the_main_diagonal() {
+        assert_eq!(
+            undone(wl_output::Transform::Flipped270),
+            [[1, 4], [2, 5], [3, 6]]
+        );
     }
 
     #[test]
