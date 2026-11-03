@@ -326,8 +326,6 @@ pub fn format_distance(value: f32) -> String {
     }
 }
 
-/// Formats the full A-to-B summary, adding a per-axis breakdown only when the
-/// line is meaningfully diagonal.
 /// Whether a distance is diagonal enough to be worth breaking down into
 /// Δx and Δy. Judged on the rounded deltas, the ones the breakdown prints, so
 /// the overlay's legs and the copied summary always agree.
@@ -335,6 +333,8 @@ pub fn shows_delta_breakdown(dx: f32, dy: f32) -> bool {
     dx.abs().round().min(dy.abs().round()) > DELTA_BREAKDOWN_THRESHOLD
 }
 
+/// Formats the full A-to-B summary, adding a per-axis breakdown only when the
+/// line is meaningfully diagonal.
 pub fn format_distance_summary(ax: f32, ay: f32, bx: f32, by: f32) -> String {
     let dx = bx - ax;
     let dy = by - ay;
