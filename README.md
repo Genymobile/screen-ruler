@@ -85,7 +85,7 @@ Measurements stay on screen as annotations instead of being copied one at a time
 |---|---|
 | Left click | Place the current measurement (point distance: place A, then B) |
 | Drag | Place a rectangle (modes 2 and 4) |
-| `Ctrl+C`, or the `MD` button | Copy all annotations as a Markdown list |
+| `Ctrl+C`, or the `MD` button | Copy all annotations as a Markdown list, then quit |
 | `Ctrl+Z` or `Z` | Undo the last annotation |
 | `Ctrl+Shift+Z` | Redo |
 | `Tab`, `Esc` or `SESSION` | Leave session mode; with annotations placed, hold for a second to discard them |
