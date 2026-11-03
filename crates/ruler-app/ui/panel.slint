@@ -39,13 +39,27 @@ component ModeIcon inherits Path {
     ][root.mode];
 }
 
-component ModeButton inherits Rectangle {
+export component ModeButton inherits Rectangle {
     // A mode icon, or -1 to show `glyph` instead.
     in property <int> mode;
     in property <string> glyph;
+    in property <length> glyph-size: 15px;
     in property <bool> active;
     in property <string> tooltip;
     callback clicked();
+    // For a button held to confirm: the left button went down on it; then,
+    // once, a button came up, the pointer left it, or the press was
+    // cancelled.
+    callback pressed();
+    callback released();
+
+    // Between `pressed` and `released`.
+    property <bool> held;
+
+    function pointer-over() -> bool {
+        touch.mouse-x >= 0 && touch.mouse-x < root.width
+            && touch.mouse-y >= 0 && touch.mouse-y < root.height
+    }
 
     width: 30px;
     height: 30px;
@@ -63,12 +77,28 @@ component ModeButton inherits Rectangle {
     if root.mode < 0: Text {
         text: root.glyph;
         color: root.active || touch.pressed ? Theme.accent : Theme.text;
-        font-size: 15px;
+        font-size: root.glyph-size;
         font-weight: 700;
     }
 
     touch := TouchArea {
         clicked => { root.clicked(); }
+        // Explicit events rather than `changed pressed`: change handlers run
+        // later, so a press and release that both land before they do would
+        // report nothing. While a button is down the moves keep coming here,
+        // even off the button. A cancel ends the press too, whatever caused
+        // it.
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                root.held = true;
+                root.pressed();
+            } else if (root.held && (event.kind == PointerEventKind.up
+                    || event.kind == PointerEventKind.cancel
+                    || !root.pointer-over())) {
+                root.held = false;
+                root.released();
+            }
+        }
     }
 
     // Slint's own tooltip: an input-transparent popup above everything,
@@ -237,7 +267,6 @@ export component Help inherits Rectangle {
         }
     }
 
-    width: 408px;
     height: list.preferred-height;
     background: Theme.panel;
     border-radius: Theme.radius;

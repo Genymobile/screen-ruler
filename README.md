@@ -4,7 +4,7 @@ A smart, edge-detection-based screen ruler for Linux, Windows and macOS.
 
 Move your mouse cursor over any UI element and instantly read the **width** and **height** of the space between the nearest edges — buttons, panels, windows, icons — with no clicking or dragging required.
 
-> **v0.1 is a preview of the Rust rewrite.** It has every measurement tool, in quick mode: measure, copy, quit. Session mode (persistent annotations, undo/redo, Markdown export) and composite image export are not ported yet; they are planned for v0.2. Until then, the [Python version](#python-version) remains the full-featured option.
+> **The Rust rewrite is in preview.** v0.1 has every measurement tool in quick mode: measure, copy, quit. Session mode (persistent annotations, undo/redo, Markdown export) is ported but not released yet: it ships in v0.2, or [build from source](#build-from-source) to use it now. Composite image export is not ported yet. Until both ship, the [Python version](#python-version) remains the full-featured option.
 
 ## How it works
 
@@ -24,7 +24,7 @@ Download the archive for your platform from the [releases page](https://github.c
 
 Each archive contains the `screen-ruler` binary and an install script that copies it to a directory of your choice and sets up a [global keyboard shortcut](#global-keyboard-shortcut). The binary also runs as is, without installing.
 
-On Linux the only runtime dependency is fontconfig, which every desktop distribution ships.
+On Linux the only runtime dependency is fontconfig, which every desktop distribution ships. For copies to stay in the clipboard, also install wl-clipboard (Wayland) or xclip or xsel (X11). Without one, a copy can be lost, as soon as it is made or when screen-ruler quits, unless the desktop runs a clipboard manager. screen-ruler then prints a warning to stderr.
 
 ## Build from source
 
@@ -73,8 +73,28 @@ screen-ruler [--sensitivity N] [--threshold-low N --threshold-high N] [--debug-e
 | `Enter` | Copy the current selection and quit |
 | `Ctrl+C` | Copy the measurement and quit |
 | Mouse wheel | Adjust the active mode's control (sensitivity, snap distance, colour averaging) |
+| `Tab` | Toggle session mode (see below) |
 | `?` or `H` | Toggle the shortcut help |
 | `Esc` or `Q` | Quit |
+
+**Session mode** (press `Tab`, or click `SESSION`)
+
+Measurements stay on screen as annotations instead of being copied one at a time, on every monitor. A frame around the screen shows the session is on.
+
+| Input | Action |
+|---|---|
+| Left click | Place the current measurement (point distance: place A, then B) |
+| Drag | Place a rectangle (modes 2 and 4) |
+| `Ctrl+C`, or the `MD` button | Copy all annotations as a Markdown list |
+| `Ctrl+Z` or `Z` | Undo the last annotation |
+| `Ctrl+Shift+Z` | Redo |
+| `Tab`, `Esc` or `SESSION` | Leave session mode; with annotations placed, hold for a second to discard them |
+| `Q` | Quit; with annotations placed, hold for a second |
+| Closing the window (e.g. `Alt+F4`) | Quit; with annotations placed, hold `Alt+F4` where the system repeats it (e.g. Windows), else hold `Q` |
+
+While you hold one of these, a bar in the prompt fills. Let go before it is full and the annotations stay.
+
+When the annotations span several monitors, each Markdown line names its monitor (`on monitor 2`). Monitors are numbered from 1 by their top edge, highest first, then left to right among those at the same height.
 
 ## Global keyboard shortcut
 
@@ -117,7 +137,7 @@ For manual setup on any platform, see [docs/manual-shortcut-setup.md](docs/manua
 
 ## Known limitations
 
-- No session mode or image export yet (planned for v0.2).
+- No composite image export yet (planned for v0.2). Session mode is not in a release yet: [build from source](#build-from-source) to use it.
 - On wlroots compositors (Sway, Hyprland), rotated or flipped monitors are captured unrotated. GNOME and Windows handle rotation.
 - Tested live on GNOME Wayland (mixed scales, several monitors) and Windows 11 (several monitors, one rotated). KDE, X11 and macOS haven't been tested yet.
 
@@ -136,19 +156,7 @@ pip install -r requirements.txt
 python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-overlay]
 ```
 
-It has the same modes and controls, plus session mode:
-
-| Input | Action |
-|---|---|
-| `Tab` | Toggle session mode (persistent annotation workspace) |
-| Left click | Place a persistent annotation at the cursor position |
-| `Ctrl+C` | Copy all annotations as a Markdown list |
-| `Ctrl+Z` or `Z` | Undo last annotation |
-| `Ctrl+Shift+Z` | Redo last undone annotation |
-| `Ctrl+Shift+C` | Enter composite export mode, then drag a region to copy a screenshot with annotations |
-| `Escape` | Exit session mode (or quit when not in session mode) |
-
-Session mode also shows `MD` and `IMG` buttons next to the `SESSION` badge for the two export actions.
+It has the same modes and controls, including session mode, plus composite image export: in session mode, `Ctrl+Shift+C` or the `IMG` button, then drag a region to copy a screenshot of it with its annotations.
 
 To build a standalone ~100 MB executable with [PyInstaller](https://pyinstaller.org) and install it with a keyboard shortcut:
 

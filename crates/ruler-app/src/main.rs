@@ -9,7 +9,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 slint::slint! {
-    export { Dial, Overlay, Rays } from "ui/overlay.slint";
+    export { AnnotationMark, Dial, MarkKind, Overlay, Rays } from "ui/overlay.slint";
 }
 
 mod analysis;
