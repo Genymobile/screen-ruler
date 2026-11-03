@@ -445,8 +445,11 @@ pub enum Command {
     /// the session's Markdown copy. A copy that fails in a session does not
     /// quit, so the annotations are not lost.
     CopyTextAndQuit(String),
-    /// Composite the given region of a monitor with its annotations and copy it.
-    CopyRegionImage(Rect),
+    /// Copy the given region as an image of the screen with its annotations,
+    /// then quit. The rect is in its monitor's logical px and may extend past
+    /// that monitor onto others. A copy that fails does not quit, so the
+    /// annotations are not lost.
+    CopyImageAndQuit(Rect),
     /// Edge thresholds changed; re-analyse every monitor.
     Recompute,
 }
@@ -498,6 +501,19 @@ pub struct DragState {
 }
 
 impl DragState {
+    /// A drag just pressed on `monitor`: both corners at `start`, with the
+    /// raw cursor at `press`.
+    pub fn pressed(monitor: usize, start: (f32, f32), press: (f32, f32)) -> Self {
+        Self {
+            active: true,
+            has_selection: false,
+            monitor,
+            start,
+            end: start,
+            press,
+        }
+    }
+
     /// True when the cursor travelled far enough for this to count as a drag
     /// rather than a click.
     ///
@@ -562,8 +578,11 @@ pub struct RulerState {
     /// First placed point, while awaiting the second.
     pub distance_anchor: Option<Point>,
 
-    /// Composite-export selection, armed by Ctrl+Shift+C.
+    /// Whether the image export waits for a drag or a click, armed by
+    /// Ctrl+Shift+C or the IMG button.
     pub export_armed: bool,
+    /// The image export's drag, in its monitor's logical px. Not snapped:
+    /// the image is the screen's own pixels.
     pub export_drag: DragState,
 
     pub help_visible: bool,
@@ -704,13 +723,17 @@ impl RulerState {
     }
 
     /// Undoes the last annotation. Returns false when there is nothing to
-    /// undo. An undo ends a hold or prompt, as placing does.
+    /// undo. An undo ends a hold or prompt, as placing does, and the image
+    /// export when it leaves nothing to export.
     pub fn undo(&mut self) -> bool {
         let Some(annotation) = self.annotations.pop() else {
             return false;
         };
         self.redo_stack.push(annotation);
         self.cancel_hold();
+        if self.annotations.is_empty() {
+            self.cancel_export();
+        }
         true
     }
 
@@ -944,8 +967,11 @@ impl RulerState {
 
     // -------------------------------------------------------------- export
 
-    /// Arms the composite-export selection, if there is anything to export.
-    pub fn arm_export(&mut self) {
+    /// Arms the image export, in a session with at least one annotation.
+    /// Without an annotation, it says so instead. A half-placed distance is
+    /// dropped: the armed export hides it, and a later Z would clear it
+    /// instead of undoing.
+    fn arm_export(&mut self) {
         if !self.session {
             return;
         }
@@ -955,7 +981,18 @@ impl RulerState {
         }
         self.export_armed = true;
         self.export_drag.clear();
-        self.show_feedback("Drag a region to copy it with annotations");
+        self.distance_anchor = None;
+    }
+
+    /// Disarms the export when armed, and arms it otherwise, as Ctrl+Shift+C
+    /// and the IMG button do. It also ends a hold or prompt, as placing does.
+    pub fn toggle_export(&mut self) {
+        self.cancel_hold();
+        if self.export_armed {
+            self.cancel_export();
+        } else {
+            self.arm_export();
+        }
     }
 
     pub fn cancel_export(&mut self) {
@@ -963,19 +1000,26 @@ impl RulerState {
         self.export_drag.clear();
     }
 
-    /// Copies the dragged export region, then disarms.
-    pub fn finish_export(&mut self) {
-        let Some(rect) = self.export_drag.rect() else {
+    /// Requests an image of the dragged export region, then disarms. A drag
+    /// under 1 px wide or high counts as a click: it requests `screen`, the
+    /// whole screen it is on.
+    pub fn finish_export(&mut self, screen: Rect) {
+        let Some(dragged) = self.export_drag.rect() else {
             self.cancel_export();
             return;
         };
-        if rect.width < 1.0 || rect.height < 1.0 {
-            self.cancel_export();
-            return;
+        if dragged.width < 1.0 || dragged.height < 1.0 {
+            self.export_region(screen);
+        } else {
+            self.export_region(dragged);
         }
-        self.push(Command::CopyRegionImage(rect));
+    }
+
+    /// Requests an image of `rect` and disarms: a dragged region, through
+    /// [`Self::finish_export`], or the whole screen under a click.
+    pub fn export_region(&mut self, rect: Rect) {
+        self.push(Command::CopyImageAndQuit(rect));
         self.cancel_export();
-        self.show_feedback("Copied region with annotations");
     }
 
     // ------------------------------------------------------------ controls
@@ -2103,66 +2147,163 @@ mod tests {
     #[test]
     fn export_requires_a_session_with_annotations() {
         let mut s = state();
-        s.arm_export();
+        s.toggle_export();
         assert!(!s.export_armed, "export outside a session should be inert");
 
         s.set_session(true);
-        s.arm_export();
+        s.toggle_export();
         assert!(!s.export_armed, "export needs at least one annotation");
 
         s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
-        s.arm_export();
+        s.toggle_export();
         assert!(s.export_armed);
     }
 
     #[test]
-    fn a_degenerate_export_drag_copies_nothing() {
+    fn exporting_without_an_annotation_says_so() {
         let mut s = state();
         s.set_session(true);
-        s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
-        s.arm_export();
-        let _ = s.take_commands();
-
-        s.export_drag.has_selection = true;
-        s.export_drag.start = (10.0, 10.0);
-        s.export_drag.end = (10.2, 10.2);
-        s.finish_export();
-
-        assert!(!s.export_armed);
-        assert!(
-            !s.take_commands()
-                .iter()
-                .any(|c| matches!(c, Command::CopyRegionImage(_))),
-            "a sub-pixel drag should not produce an image"
+        s.toggle_export();
+        assert_eq!(
+            s.feedback_message().as_deref(),
+            Some("Place an annotation before exporting")
         );
     }
 
+    /// The whole screen of monitor 1, for an export that falls back to it.
+    fn screen() -> Rect {
+        Rect {
+            monitor: 1,
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        }
+    }
+
     #[test]
-    fn a_real_export_drag_requests_the_composite() {
+    fn a_drag_under_a_pixel_exports_the_whole_screen() {
+        let mut s = session_with_work();
+        s.toggle_export();
+
+        s.export_drag.has_selection = true;
+        s.export_drag.monitor = 1;
+        s.export_drag.start = (10.0, 10.0);
+        s.export_drag.end = (10.2, 300.0);
+        s.finish_export(screen());
+
+        assert_eq!(s.take_commands(), vec![Command::CopyImageAndQuit(screen())]);
+        assert!(!s.export_armed);
+    }
+
+    #[test]
+    fn a_real_export_drag_requests_the_image() {
         let mut s = state();
         s.set_session(true);
         s.add_annotation(Annotation::test_rect(0.0, 0.0, 10.0, 10.0));
-        s.arm_export();
+        s.toggle_export();
         let _ = s.take_commands();
 
         s.export_drag.has_selection = true;
         s.export_drag.monitor = 1;
         s.export_drag.start = (100.0, 80.0);
         s.export_drag.end = (20.0, 20.0);
-        s.finish_export();
+        s.finish_export(screen());
 
         let commands = s.take_commands();
         let rect = commands
             .iter()
             .find_map(|c| match c {
-                Command::CopyRegionImage(r) => Some(*r),
+                Command::CopyImageAndQuit(r) => Some(*r),
                 _ => None,
             })
-            .expect("expected a composite request");
+            .expect("expected an image request");
         // The drag is normalised regardless of its direction.
         assert_eq!(rect.monitor, 1);
         assert_eq!((rect.x, rect.y), (20.0, 20.0));
         assert_eq!((rect.width, rect.height), (80.0, 60.0));
+    }
+
+    #[test]
+    fn toggling_the_export_arms_it_then_disarms_it() {
+        let mut s = session_with_work();
+        s.toggle_export();
+        assert!(s.export_armed);
+
+        s.toggle_export();
+        assert!(!s.export_armed);
+    }
+
+    #[test]
+    fn arming_the_export_drops_a_half_placed_distance() {
+        // The armed export hides the anchor, so the next Z would clear it
+        // instead of undoing an annotation.
+        let mut s = session_with_work();
+        s.set_mode(Mode::Distance);
+        s.distance_anchor = Some(point(1.0, 2.0));
+
+        s.toggle_export();
+        assert!(s.export_armed);
+        assert!(s.distance_anchor.is_none());
+    }
+
+    #[test]
+    fn toggling_the_export_ends_a_held_discard() {
+        let mut s = session_with_work();
+        let t0 = Instant::now();
+        s.request_destructive_at(Destructive::ToggleSession, t0);
+
+        s.toggle_export();
+        assert_eq!(s.destructive_prompt(), None);
+        frames(&mut s, t0, 1100);
+        assert!(s.session, "the held discard must not confirm");
+    }
+
+    #[test]
+    fn exporting_a_region_requests_the_image_and_disarms() {
+        let mut s = session_with_work();
+        s.toggle_export();
+
+        s.export_region(screen());
+        assert_eq!(s.take_commands(), vec![Command::CopyImageAndQuit(screen())]);
+        assert!(!s.export_armed);
+    }
+
+    #[test]
+    fn undoing_the_last_annotation_disarms_the_export() {
+        let mut s = session_with_work();
+        s.toggle_export();
+
+        assert!(s.undo());
+        assert!(!s.export_armed);
+    }
+
+    #[test]
+    fn an_undo_that_leaves_an_annotation_keeps_the_export_armed() {
+        let mut s = session_with_work();
+        s.add_annotation(Annotation::test_rect(5.0, 5.0, 20.0, 20.0));
+        s.toggle_export();
+
+        assert!(s.undo());
+        assert!(s.export_armed);
+    }
+
+    #[test]
+    fn switching_mode_cancels_the_export() {
+        let mut s = session_with_work();
+        s.toggle_export();
+
+        s.set_mode(Mode::Distance);
+        assert!(!s.export_armed);
+    }
+
+    #[test]
+    fn leaving_the_session_cancels_the_export() {
+        let mut s = session_with_work();
+        s.toggle_export();
+
+        s.set_session(false);
+        assert!(!s.export_armed);
     }
 
     #[test]

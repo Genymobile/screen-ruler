@@ -648,7 +648,7 @@ impl App {
                         });
                 }
                 // Image export is not wired yet, and nothing reachable emits it.
-                Command::CopyRegionImage(_) => {}
+                Command::CopyImageAndQuit(_) => {}
             }
         }
     }
