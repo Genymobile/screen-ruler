@@ -9,3 +9,6 @@ build/
 
 # Rust (crates/) - Cargo.lock is committed since ruler-app is an application binary
 /target/
+
+# Talos: leftover of an interrupted sync
+.talos-*.tmp
