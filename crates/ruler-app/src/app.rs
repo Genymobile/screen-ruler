@@ -11,8 +11,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use image::RgbaImage;
 use ruler_core::analysis::Analysis;
-use ruler_core::clipboard::{self, Copied};
+use ruler_core::capture;
+use ruler_core::clipboard::{self, Copied, Payload};
 use ruler_core::color::{KernelCache, Sample};
 use ruler_core::edges;
 use ruler_core::geometry::{Point, Rect};
@@ -21,9 +23,11 @@ use ruler_core::state::{
     Control, Destructive, DragState, Mode, RulerState, HELP_FADE, MODE_COUNT,
 };
 use slint::platform::Key;
+use slint::winit_030::WinitWindowAccessor;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::analysis;
+use crate::export::{self, Placement};
 use crate::input::{self, Wheel};
 use crate::surface::{LogicalRays, Surface};
 use crate::{AnnotationMark, Dial, MarkKind, Overlay, Rays};
@@ -60,6 +64,9 @@ pub struct App {
     /// The selection as it was before the current press, restored if the
     /// press turns out to be a confirming click.
     previous_drag: Option<DragState>,
+    /// Where each window sits in the desktop's frame, by monitor, taken when
+    /// an export press starts: what lets the export region span screens.
+    export_layout: Vec<Option<Placement>>,
     wheel: Wheel,
     /// Sampling kernels, cached per radius.
     kernels: KernelCache,
@@ -104,6 +111,7 @@ impl App {
             hovered: None,
             press: None,
             previous_drag: None,
+            export_layout: Vec::new(),
             wheel: Wheel::default(),
             kernels: KernelCache::new(),
             thresholds,
@@ -151,6 +159,9 @@ impl App {
         if self.state.drag.active && self.state.drag.monitor != monitor {
             return;
         }
+        if self.state.export_drag.active && self.state.export_drag.monitor != monitor {
+            return;
+        }
         self.hovered = Some(monitor);
         self.state.pointer = Some(Point { monitor, x, y });
         self.state.active_monitor = monitor;
@@ -159,6 +170,11 @@ impl App {
             if let Some(point) = self.placement() {
                 self.state.drag.end = (point.x, point.y);
             }
+        }
+        // Unsnapped, and possibly outside the window, onto other screens:
+        // the window keeps getting the moves of a press made on it.
+        if self.state.export_drag.active {
+            self.state.export_drag.end = (x, y);
         }
         self.render();
     }
@@ -219,7 +235,12 @@ impl App {
         // Starting a measurement is a sign the help has been read.
         self.dismiss_help();
         self.press = Some((monitor, x, y));
-        if self.state.mode.is_rect_selection() {
+        if self.state.export_armed {
+            // The region is the screens' own pixels, so nothing snaps.
+            self.state.export_drag = DragState::pressed(monitor, (x, y), (x, y));
+            self.export_layout = self.lay_out_export(monitor);
+            self.render();
+        } else if self.state.mode.is_rect_selection() {
             // Kept aside: if this press turns out to be a click, it confirms
             // the selection a previous drag left rather than starting anew.
             self.previous_drag = Some(self.state.drag);
@@ -227,14 +248,7 @@ impl App {
                 .placement()
                 .filter(|p| p.monitor == monitor)
                 .map_or((x, y), |p| (p.x, p.y));
-            self.state.drag = DragState {
-                active: true,
-                has_selection: false,
-                monitor,
-                start,
-                end: start,
-                press: (x, y),
-            };
+            self.state.drag = DragState::pressed(monitor, start, (x, y));
             self.render();
         }
     }
@@ -246,7 +260,9 @@ impl App {
         // Acting on release, not press: a click is only a click once the
         // button comes back up without the pointer having travelled.
         let click = pressed_on == monitor && input::is_click((px, py), (x, y));
-        if self.state.mode.is_rect_selection() {
+        if self.state.export_armed {
+            self.finish_export(click);
+        } else if self.state.mode.is_rect_selection() {
             self.finish_drag(click);
         } else if click {
             self.click(monitor, x, y);
@@ -281,6 +297,33 @@ impl App {
                 self.state.drag.start = (shrunk.x, shrunk.y);
                 self.state.drag.end = (shrunk.x + shrunk.width, shrunk.y + shrunk.height);
             }
+        }
+    }
+
+    /// Copies the export region as an image: the whole screen under a click,
+    /// or the dragged region, unless it is under a pixel on a side, which
+    /// counts as a click too.
+    ///
+    /// The drag ends on a screen. If the layout puts its end on none, the
+    /// layout is wrong: the region is then cut at the start screen's edge
+    /// rather than stitched from misplaced screens.
+    fn finish_export(&mut self, click: bool) {
+        let start = self.state.export_drag.monitor;
+        let Some(screen) = self.window_rect(start) else {
+            self.state.cancel_export();
+            return;
+        };
+        if !export::lands_on_a_window(&self.export_layout, start, self.state.export_drag.end) {
+            eprintln!(
+                "screen-ruler: the drag ended off every screen the image export knows the place \
+                 of, so the image stops at the edge of the screen where the drag started"
+            );
+            self.export_layout = self.alone(&self.export_layout, start);
+        }
+        if click {
+            self.state.export_region(screen);
+        } else {
+            self.state.finish_export(screen);
         }
     }
 
@@ -435,18 +478,23 @@ impl App {
     /// Runs a destructive action, or starts holding it when it has to be
     /// held to confirm.
     fn request_destructive(&mut self, action: Destructive) {
-        self.cancel_drag_if_session_left(|state| state.request_destructive(action));
+        self.cancel_drag_if_session_or_export_ends(|state| state.request_destructive(action));
     }
 
-    /// Runs `change`, which may leave the session. If it does, the press in
-    /// progress goes too: released in quick mode, it would leave a selection
-    /// behind, or copy and quit.
-    fn cancel_drag_if_session_left(&mut self, change: impl FnOnce(&mut RulerState)) {
-        let session = self.state.session;
-        change(&mut self.state);
-        if self.state.session != session {
+    /// Runs `change`, which may leave the session or disarm the image
+    /// export. If it does either, the press in progress goes too: released in
+    /// quick mode, it would leave a selection behind, or copy and quit, and
+    /// released with the export disarmed, it would place an annotation.
+    fn cancel_drag_if_session_or_export_ends<R>(
+        &mut self,
+        change: impl FnOnce(&mut RulerState) -> R,
+    ) -> R {
+        let (session, armed) = (self.state.session, self.state.export_armed);
+        let result = change(&mut self.state);
+        if self.state.session != session || (armed && !self.state.export_armed) {
             self.cancel_drag();
         }
+        result
     }
 
     /// Ends a discard's hold without confirming it: a key or the SESSION
@@ -460,7 +508,7 @@ impl App {
     /// Confirms a discard once it has been held long enough, on the frame
     /// timer.
     fn advance_hold(&mut self) {
-        self.cancel_drag_if_session_left(|state| state.advance_hold(Instant::now()));
+        self.cancel_drag_if_session_or_export_ends(|state| state.advance_hold(Instant::now()));
         self.process_commands();
     }
 
@@ -479,17 +527,43 @@ impl App {
         self.render();
     }
 
-    /// Copies every annotation as Markdown: the MD button, and Ctrl+C in a
-    /// session.
+    /// Copies every annotation as Markdown, then quits: the MD button, and
+    /// Ctrl+C in a session.
     fn copy_markdown(&mut self) {
         self.state.cancel_hold();
         self.state.copy_annotations();
     }
 
+    fn image_clicked(&mut self) {
+        self.toggle_export();
+        self.process_commands();
+        self.render();
+    }
+
+    /// Arms the image export, or disarms it: the IMG button, and
+    /// Ctrl+Shift+C in a session. A press in progress goes, so that its
+    /// release neither exports nor places anything.
+    fn toggle_export(&mut self) {
+        self.cancel_drag();
+        self.state.toggle_export();
+    }
+
+    /// Switches mode, which disarms the image export: the number keys and
+    /// the mode buttons.
+    fn set_mode(&mut self, mode: Mode) {
+        self.cancel_drag_if_session_or_export_ends(|state| state.set_mode(mode));
+        self.refresh_derived();
+    }
+
+    /// Undoes the last annotation, which disarms the image export when it
+    /// leaves none. Returns false when there is nothing to undo.
+    fn undo(&mut self) -> bool {
+        self.cancel_drag_if_session_or_export_ends(RulerState::undo)
+    }
+
     fn mode_clicked(&mut self, index: usize) {
         if let Some(mode) = Mode::from_index(index) {
-            self.state.set_mode(mode);
-            self.refresh_derived();
+            self.set_mode(mode);
             self.render();
         }
     }
@@ -542,30 +616,34 @@ impl App {
         let is = |key: Key| text == SharedString::from(key).as_str();
         let digit = text.parse::<usize>().ok().filter(|_| text.len() == 1);
         let quits = !ctrl && text.eq_ignore_ascii_case("q");
-        // In a session, Ctrl+Shift+C is kept for the image export, so it
-        // does not copy the Markdown there.
-        let copies = ctrl
-            && !(shift && self.state.session)
-            && (text.eq_ignore_ascii_case("c") || text == "\u{3}");
+        // With Ctrl held, C can arrive as its control character U+0003.
+        let is_c = text.eq_ignore_ascii_case("c") || text == "\u{3}";
+        // In a session, Ctrl+Shift+C toggles the image export instead of
+        // copying the Markdown.
+        let exports = ctrl && shift && self.state.session && is_c;
+        let copies = ctrl && !exports && is_c;
 
         // A repeat must neither restart a hold, which would then never
         // complete, nor run an action again: with nothing to lose, a held
         // Tab would toggle the session on and off, and a held Esc would
         // leave the session, then quit. A held Ctrl+C would copy again and
-        // again.
+        // again, and a held Ctrl+Shift+C would arm and disarm the export.
         let discards = is(Key::Tab) || is(Key::Escape) || quits;
-        if repeat && (discards || copies) {
+        if repeat && (discards || copies || exports) {
             return true;
         }
 
         let handled = if let Some(mode) = digit.and_then(Mode::from_digit).filter(|_| !ctrl) {
-            self.state.set_mode(mode);
-            self.refresh_derived();
+            self.set_mode(mode);
             true
         } else if is(Key::Escape) {
-            // Steps back one level at a time: a drag in progress, a
-            // half-placed distance or a pending selection before leaving.
-            if self.state.drag.active {
+            // Steps back one level at a time: the image export, a drag in
+            // progress, a half-placed distance or a pending selection before
+            // leaving.
+            if self.state.export_armed {
+                self.cancel_drag();
+                self.state.cancel_export();
+            } else if self.state.drag.active {
                 self.cancel_drag();
             } else if self.state.distance_anchor.is_some() {
                 self.state.distance_anchor = None;
@@ -588,7 +666,7 @@ impl App {
                 }
             } else if self.state.distance_anchor.is_some() {
                 self.state.distance_anchor = None;
-            } else if !self.state.undo() {
+            } else if !self.undo() {
                 self.state.show_feedback("Nothing to undo");
             }
             true
@@ -602,6 +680,9 @@ impl App {
             true
         } else if quits {
             self.request_destructive(Destructive::Quit);
+            true
+        } else if exports {
+            self.toggle_export();
             true
         } else if copies {
             if self.state.session {
@@ -628,12 +709,18 @@ impl App {
                     let _ = slint::quit_event_loop();
                 }
                 Command::CopyTextAndQuit(text) => {
-                    // The windows close at once, before a message could be
-                    // read: problems only go to stderr.
-                    let _ = report_copy(clipboard::copy_text(&text));
-                    // Also on stdout, so the measurement can be scripted.
-                    println!("{text}");
-                    let _ = slint::quit_event_loop();
+                    let failure = report_copy(clipboard::copy_text(&text), Payload::Text);
+                    match stay_open_message(failure, self.state.session) {
+                        Some(message) => self.state.show_feedback(&message),
+                        None => {
+                            // Print the text, so the measurement can be
+                            // scripted, and quit. On a quick-mode failure the
+                            // windows close before a message could be read, so
+                            // problems only go to stderr.
+                            println!("{text}");
+                            let _ = slint::quit_event_loop();
+                        }
+                    }
                 }
                 Command::Recompute => {
                     self.recompute_timer
@@ -641,13 +728,72 @@ impl App {
                             with_app(App::analyse)
                         });
                 }
-                Command::CopyText(text) => {
-                    if let Some(message) = report_copy(clipboard::copy_text(&text)) {
-                        self.state.show_feedback(&message);
-                    }
-                }
-                // Image export is not wired yet, and nothing reachable emits it.
-                Command::CopyRegionImage(_) => {}
+                Command::CopyImageAndQuit(rect) => self.schedule_image_copy(rect),
+            }
+        }
+    }
+
+    /// Snapshots every window `rect` covers, on the next turn of the event
+    /// loop, cuts each one's part of `rect` out of its snapshot, and copies
+    /// them stitched into one image. `rect` is on its monitor's window, in
+    /// its logical px, and runs onto the other screens the export layout
+    /// places.
+    ///
+    /// Deferred, because the snapshot renders the window, and rendering runs
+    /// change handlers that call `with_app`: taken while the app is borrowed,
+    /// as it is here, the snapshot would panic.
+    fn schedule_image_copy(&mut self, rect: Rect) {
+        // `export::composite` then uses the start screen alone.
+        if export::leaves_out_overlapping_screens(rect, &self.export_layout) {
+            eprintln!(
+                "screen-ruler: two screens the image export places overlap, as mirrored \
+                 displays do, so the image stops at the edge of the screen where the drag \
+                 started"
+            );
+        }
+        let Some(composite) = export::composite(rect, &self.export_layout) else {
+            self.copy_image_and_quit(Err("the region is outside the window".to_string()));
+            return;
+        };
+        // Weak handles: a window gone by then has nothing left to copy.
+        let windows: Vec<_> = composite
+            .parts
+            .iter()
+            .map(|part| {
+                let window = self.windows[part.monitor].as_weak();
+                let capture_size = self.surfaces[part.monitor].image.dimensions();
+                (window, capture_size)
+            })
+            .collect();
+        Timer::single_shot(Duration::ZERO, move || {
+            let images = composite
+                .parts
+                .iter()
+                .zip(&windows)
+                .map(|(part, (window, capture_size))| {
+                    let window = window.upgrade().ok_or("the window is gone")?;
+                    snapshot_region(&window, part.region, *capture_size)
+                })
+                .collect::<Result<Vec<_>, String>>();
+            let image = images.map(|images| export::stitch(&composite, &images));
+            with_app(|app| app.copy_image_and_quit(image));
+        });
+    }
+
+    /// Copies the export image, or reports why there is none, and quits,
+    /// unless that failed: a session then stays open with the message.
+    fn copy_image_and_quit(&mut self, image: Result<RgbaImage, String>) {
+        let failure = match image {
+            Ok(image) => report_copy(clipboard::copy_image(&image), Payload::Png),
+            Err(e) => Some(report_image_failure(&e)),
+        };
+        match stay_open_message(failure, self.state.session) {
+            Some(message) => {
+                self.state.show_feedback(&message);
+                self.render();
+            }
+            None => {
+                let _ = slint::quit_event_loop();
             }
         }
     }
@@ -753,6 +899,23 @@ impl App {
         let hovered = self.hovered == Some(monitor);
         let pointer = self.state.pointer.filter(|p| p.monitor == monitor);
 
+        // While armed, the export replaces the measurement: only its region
+        // shows, on every screen it covers, without a size, since the image
+        // is what gets copied.
+        if self.state.export_armed {
+            live.rect = self
+                .state
+                .export_drag
+                .rect()
+                .and_then(|r| export::region_on(r, &self.export_layout, monitor));
+            if monitor == self.state.active_monitor {
+                live.hint = Some(
+                    "Drag a region or click a screen to copy it as an image, then quit · Esc to cancel",
+                );
+            }
+            return live;
+        }
+
         let analysing = hovered && self.surfaces[monitor].edges.is_none();
         if analysing && self.state.mode.needs_edges() {
             if let Some(p) = pointer {
@@ -841,7 +1004,7 @@ impl App {
             self.state.debug_edges,
             self.preview_since.map(|t| t.elapsed()),
         );
-        let dragging = self.state.drag.active;
+        let dragging = self.state.drag.active || self.state.export_drag.active;
         let (help, help_visible) = input::help_opacity(
             self.state.help_visible,
             self.state.help_auto_hide_at,
@@ -939,6 +1102,7 @@ impl App {
             window.set_hint_text(live.hint.unwrap_or_default().into());
 
             window.set_session(self.state.session);
+            window.set_export_armed(self.state.export_armed);
             sync(
                 &self.annotation_models[monitor],
                 self.state
@@ -992,11 +1156,131 @@ impl App {
             .collect()
     }
 
+    /// The whole of `monitor`'s window, in its logical px.
+    fn window_rect(&self, monitor: usize) -> Option<Rect> {
+        let window = self.windows.get(monitor)?.window();
+        let size = window.size().to_logical(window.scale_factor());
+        Some(Rect {
+            monitor,
+            x: 0.0,
+            y: 0.0,
+            width: size.width,
+            height: size.height,
+        })
+    }
+
     fn window_logical_width(&self, monitor: usize) -> Option<f32> {
         let window = self.windows.get(monitor)?.window();
-        let width = window.size().width as f32 / window.scale_factor();
+        let width = window.size().to_logical(window.scale_factor()).width;
         (width > 0.0).then_some(width)
     }
+
+    // ------------------------------------------------------ export layout
+
+    /// Where each window sits in the desktop's frame, for an export pressed
+    /// on `start`'s window, by monitor.
+    ///
+    /// A window winit cannot tell the monitor of is left out. If that is the
+    /// start window, it cannot be related to any other, so it stands alone:
+    /// the region is then cut at its edge.
+    fn lay_out_export(&mut self, start: usize) -> Vec<Option<Placement>> {
+        // The capture scale of a window the pointer has not been over yet
+        // is still the capture backend's guess.
+        for monitor in 0..self.windows.len() {
+            if let Some(width) = self.window_logical_width(monitor) {
+                self.surfaces[monitor].reconcile_scale(width);
+            }
+        }
+        let logical = capture::desktop_frame_is_logical();
+        let layout: Vec<_> = (0..self.windows.len())
+            .map(|monitor| self.frame_placement(monitor, logical))
+            .collect();
+        if layout.get(start).copied().flatten().is_some() {
+            layout
+        } else {
+            self.alone(&layout, start)
+        }
+    }
+
+    /// `layout` with only `start`'s window left in it, placed on its own if
+    /// it has no place: that cuts the region at the start screen's edge.
+    fn alone(&self, layout: &[Option<Placement>], start: usize) -> Vec<Option<Placement>> {
+        let placement = layout
+            .get(start)
+            .copied()
+            .flatten()
+            .or_else(|| self.standalone_placement(start));
+        (0..self.windows.len())
+            .map(|monitor| placement.filter(|_| monitor == start))
+            .collect()
+    }
+
+    /// Where `monitor`'s window sits in the desktop's frame, from the
+    /// monitor winit says it is on. `logical` is whether that frame is in
+    /// logical px ([`capture::desktop_frame_is_logical`]).
+    fn frame_placement(&self, monitor: usize, logical: bool) -> Option<Placement> {
+        let window = self.windows.get(monitor)?.window();
+        let (origin, system_scale) = window
+            .with_winit_window(|winit_window| {
+                let screen = winit_window.current_monitor()?;
+                let position = screen.position();
+                let (x, y) = (f64::from(position.x), f64::from(position.y));
+                let origin = if logical {
+                    // winit reports a logical layout scaled by the
+                    // monitor's own factor; dividing it back gives it.
+                    let factor = screen.scale_factor();
+                    (factor.is_finite() && factor > 0.0)
+                        .then(|| ((x / factor) as f32, (y / factor) as f32))?
+                } else {
+                    (x as f32, y as f32)
+                };
+                // The window system's scale, which `SLINT_SCALE_FACTOR`
+                // leaves as it is while it overrides the window's.
+                Some((origin, winit_window.scale_factor() as f32))
+            })
+            .flatten()?;
+        let units = export::frame_units(logical, window.scale_factor(), system_scale);
+        self.placement_at(monitor, origin, units)
+    }
+
+    /// A place for `monitor`'s window with no relation to any other: at the
+    /// frame's origin, one unit per logical px.
+    fn standalone_placement(&self, monitor: usize) -> Option<Placement> {
+        self.placement_at(monitor, (0.0, 0.0), 1.0)
+    }
+
+    /// `monitor`'s window at `origin` in the frame, with `units` frame units
+    /// per logical px.
+    fn placement_at(&self, monitor: usize, origin: (f32, f32), units: f32) -> Option<Placement> {
+        let window = self.windows.get(monitor)?.window();
+        let size = window.size().to_logical(window.scale_factor());
+        let capture_scale = self.surfaces.get(monitor)?.geometry.sanitised_scale();
+        Some(Placement {
+            origin,
+            units,
+            density: capture_scale / units,
+            size: (size.width, size.height),
+        })
+    }
+}
+
+/// Snapshots `window` with only its screenshot and placed annotations drawn,
+/// and cuts `rect`, its part of the export region, out of it at the
+/// resolution of the screen's capture, `capture_size` device px.
+///
+/// Never called while the app is borrowed: see `App::schedule_image_copy`.
+fn snapshot_region(
+    window: &Overlay,
+    rect: Rect,
+    capture_size: (u32, u32),
+) -> Result<RgbaImage, String> {
+    window.set_snapshot(true);
+    let snapshot = window.window().take_snapshot();
+    window.set_snapshot(false);
+    let snapshot = snapshot.map_err(|e| format!("cannot take a snapshot of the window: {e}"))?;
+    let scale = window.window().scale_factor();
+    export::image(&snapshot, rect, scale, capture_size)
+        .ok_or_else(|| "the region is outside the window".to_string())
 }
 
 /// Routes one window's callbacks to the app, tagged with its monitor.
@@ -1013,6 +1297,7 @@ fn wire(window: &Overlay, monitor: usize) {
     window.on_session_pressed(|| with_app(App::session_pressed));
     window.on_session_released(|| with_app(App::release_destructive));
     window.on_markdown_clicked(|| with_app(App::markdown_clicked));
+    window.on_image_clicked(|| with_app(App::image_clicked));
     window.on_key(|text, ctrl, shift, repeat| {
         let mut handled = false;
         with_app(|app| handled = app.key(&text, ctrl, shift, repeat));
@@ -1038,14 +1323,15 @@ fn wire(window: &Overlay, monitor: usize) {
 /// Only a failed copy shows a message. A copy that may not last is a warning
 /// on stderr alone: a clipboard manager, such as GNOME's, often keeps it, and
 /// the app cannot tell, so on screen it would mostly be a false alarm.
-fn report_copy(result: Result<Copied, String>) -> Option<String> {
+/// `payload` picks the package that warning tells the user to install.
+fn report_copy(result: Result<Copied, String>, payload: Payload) -> Option<String> {
     match result {
         Ok(Copied::Lasting) => None,
         Ok(Copied::MayNotLast) => {
             eprintln!(
-                "screen-ruler: no clipboard helper found, so the copy may not stay \
+                "screen-ruler: no clipboard helper for this copy, so it may not stay \
                  in the clipboard: it can go at once, or when screen-ruler quits; {}",
-                clipboard::install_hint()
+                clipboard::install_hint(payload)
             );
             None
         }
@@ -1054,6 +1340,23 @@ fn report_copy(result: Result<Copied, String>) -> Option<String> {
             Some("Could not copy to the clipboard".to_string())
         }
     }
+}
+
+/// Logs why the export image could not be made, its snapshot or its crop,
+/// and returns the message to show on screen.
+fn report_image_failure(error: &str) -> String {
+    eprintln!("screen-ruler: could not make the image: {error}");
+    "Could not make the image".to_string()
+}
+
+/// The message to show if a copy keeps the app open, given the on-screen
+/// message `report_copy` returned for it; `None` means the copy quits.
+///
+/// Every copy quits, except one that failed in a session: that stays open
+/// with the message, so the annotations are not lost and the copy can be
+/// retried. A failure in quick mode still quits, as there is nothing to lose.
+fn stay_open_message(failure: Option<String>, session: bool) -> Option<String> {
+    failure.filter(|_| session)
 }
 
 /// Updates `model` to `rows`, touching only the rows that changed.
@@ -1093,7 +1396,7 @@ fn help_lines(mode: Mode, session: bool) -> Vec<SharedString> {
     };
     let (copy, undo_or_session, leave) = if session {
         (
-            "Ctrl+C — copy all annotations as Markdown",
+            "Ctrl+C — copy all annotations as Markdown, then quit",
             "Ctrl+Z or Z — undo  ·  Ctrl+Shift+Z — redo",
             "Tab or Esc — leave session mode  ·  Q — quit",
         )
@@ -1104,15 +1407,25 @@ fn help_lines(mode: Mode, session: bool) -> Vec<SharedString> {
             "Esc or Q — quit",
         )
     };
-    vec![
+    let mut lines: Vec<SharedString> = vec![
         format!("1–{MODE_COUNT} — switch measurement mode").into(),
         click.into(),
         copy.into(),
+    ];
+    if session {
+        lines.push(
+            "Ctrl+Shift+C — drag a region or click a screen to copy it as an image, then quit  ·  \
+             Esc cancels"
+                .into(),
+        );
+    }
+    lines.extend([
         undo_or_session.into(),
         "Wheel — adjust the first slider".into(),
         "? or H — toggle this help (hover it to hide it)".into(),
         leave.into(),
-    ]
+    ]);
+    lines
 }
 
 /// A placed annotation as its window draws it: the same marks and chip
@@ -1440,20 +1753,61 @@ mod tests {
 
     #[test]
     fn a_lasting_copy_needs_no_message() {
-        assert_eq!(report_copy(Ok(Copied::Lasting)), None);
+        assert_eq!(report_copy(Ok(Copied::Lasting), Payload::Text), None);
     }
 
     #[test]
     fn a_copy_that_may_not_last_shows_no_message() {
-        assert_eq!(report_copy(Ok(Copied::MayNotLast)), None);
+        assert_eq!(report_copy(Ok(Copied::MayNotLast), Payload::Text), None);
     }
 
     #[test]
     fn a_failed_copy_says_so() {
         assert_eq!(
-            report_copy(Err("no display".to_string())).as_deref(),
+            report_copy(Err("no display".to_string()), Payload::Text).as_deref(),
             Some("Could not copy to the clipboard")
         );
+    }
+
+    #[test]
+    fn an_image_that_could_not_be_made_says_so() {
+        assert_eq!(
+            report_image_failure("no snapshot"),
+            "Could not make the image"
+        );
+    }
+
+    #[test]
+    fn a_failed_session_copy_stays_open_with_its_message() {
+        let failure = report_copy(Err("no display".to_string()), Payload::Text);
+        assert_eq!(
+            stay_open_message(failure, true).as_deref(),
+            Some("Could not copy to the clipboard")
+        );
+    }
+
+    #[test]
+    fn a_session_copy_that_may_not_last_still_quits() {
+        let failure = report_copy(Ok(Copied::MayNotLast), Payload::Text);
+        assert_eq!(stay_open_message(failure, true), None);
+    }
+
+    #[test]
+    fn a_failed_quick_copy_quits() {
+        let failure = report_copy(Err("no display".to_string()), Payload::Text);
+        assert_eq!(stay_open_message(failure, false), None);
+    }
+
+    #[test]
+    fn a_successful_copy_quits() {
+        for session in [false, true] {
+            let failure = report_copy(Ok(Copied::Lasting), Payload::Text);
+            assert_eq!(
+                stay_open_message(failure, session),
+                None,
+                "session: {session}"
+            );
+        }
     }
 
     #[test]
@@ -1464,12 +1818,27 @@ mod tests {
 
         for mode in Mode::ALL {
             let session = help_lines(mode, true);
+            let click = session
+                .iter()
+                .find(|l| l.starts_with("Click") || l.starts_with("Drag"))
+                .expect("a click line");
             assert!(
-                !session.iter().any(|l| l.contains("then quit")),
+                !click.contains("then quit"),
                 "{mode:?}: nothing quits on a click in a session: {session:?}"
             );
             assert!(session.iter().any(|l| l.contains("undo")), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn the_session_help_says_a_copy_quits() {
+        let session = help_lines(Mode::Crosshair, true);
+        assert!(
+            session
+                .iter()
+                .any(|l| l.starts_with("Ctrl+C") && l.ends_with("then quit")),
+            "{session:?}"
+        );
     }
 
     #[test]
@@ -1482,6 +1851,26 @@ mod tests {
         assert!(
             session.iter().any(|l| l.starts_with("Tab or Esc")),
             "{session:?}"
+        );
+    }
+
+    #[test]
+    fn the_session_help_names_the_image_export_key() {
+        let session = help_lines(Mode::Crosshair, true);
+        assert!(
+            session.iter().any(|l| l.starts_with("Ctrl+Shift+C")
+                && l.contains("then quit")
+                && l.ends_with("Esc cancels")),
+            "{session:?}"
+        );
+    }
+
+    #[test]
+    fn the_quick_help_does_not_offer_the_image_export() {
+        let quick = help_lines(Mode::Crosshair, false);
+        assert!(
+            !quick.iter().any(|l| l.contains("Ctrl+Shift+C")),
+            "{quick:?}"
         );
     }
 

@@ -44,6 +44,48 @@ pub struct Rect {
     pub height: f32,
 }
 
+impl Rect {
+    /// Converts this rectangle into a device-pixel crop
+    /// `(left, top, width, height)` of a window `window` device px in size,
+    /// with `scale` device px per logical px.
+    ///
+    /// The caller passes the scale the window's pixels were made at (for a
+    /// snapshot, the window's own scale factor), not a monitor's capture
+    /// scale: the two can differ.
+    ///
+    /// Clamped to the window, since a drag can end outside it. A rectangle
+    /// starting in the far half of the last pixel column or row keeps that
+    /// pixel rather than rounding to nothing. `None` when the rectangle does
+    /// not overlap the window at all, or when `scale` is not finite or not
+    /// positive. This is what cuts the image export out of a window snapshot.
+    pub fn device_crop(&self, scale: f32, window: (u32, u32)) -> Option<(u32, u32, u32, u32)> {
+        if !(scale.is_finite() && scale > 0.0) {
+            return None;
+        }
+        // Clip both edges, then derive the extent: clamping only the origin
+        // would keep the full width for a rect starting off-window, and the
+        // crop would run past the selection.
+        let edge = |logical: f32, max: u32| (logical * scale).round().clamp(0.0, max as f32) as u32;
+        // A start in the far half of the last pixel rounds onto the window's
+        // far edge, which would leave an empty crop: keep that pixel.
+        let start = |logical: f32, max: u32| {
+            let pixel = edge(logical, max);
+            if logical * scale < max as f32 {
+                pixel.min(max.saturating_sub(1))
+            } else {
+                pixel
+            }
+        };
+        let (left, right) = (start(self.x, window.0), edge(self.x + self.width, window.0));
+        let (top, bottom) = (
+            start(self.y, window.1),
+            edge(self.y + self.height, window.1),
+        );
+
+        (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
+    }
+}
+
 /// Where one monitor sits in the virtual desktop, and how dense its pixels are.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MonitorGeometry {
@@ -106,24 +148,6 @@ impl MonitorGeometry {
             && y >= self.position.1
             && x < self.position.0 + self.size.0 as i32
             && y < self.position.1 + self.size.1 as i32
-    }
-
-    /// Converts a logical rectangle on this monitor into a device-pixel crop
-    /// `(left, top, width, height)` of a window `window` device px in size.
-    ///
-    /// Clamped to the window, since a drag can end slightly outside it.
-    /// `None` when the rectangle does not overlap the window at all. This is
-    /// what cuts the composite export out of a window snapshot.
-    pub fn device_crop(&self, rect: Rect, window: (u32, u32)) -> Option<(u32, u32, u32, u32)> {
-        let scale = self.sanitised_scale();
-        // Clip both edges, then derive the extent: clamping only the origin
-        // would keep the full width for a rect starting off-window, and the
-        // crop would run past the selection.
-        let edge = |logical: f32, max: u32| (logical * scale).round().clamp(0.0, max as f32) as u32;
-        let (left, right) = (edge(rect.x, window.0), edge(rect.x + rect.width, window.0));
-        let (top, bottom) = (edge(rect.y, window.1), edge(rect.y + rect.height, window.1));
-
-        (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
     }
 }
 
@@ -264,44 +288,76 @@ mod tests {
 
     #[test]
     fn logical_rects_scale_into_device_crops() {
-        let hidpi = monitor("A", (0, 0), (3840, 2160), 2.0);
-        let crop = hidpi.device_crop(rect(10.0, 20.0, 100.0, 50.0), (3840, 2160));
+        let crop = rect(10.0, 20.0, 100.0, 50.0).device_crop(2.0, (3840, 2160));
         assert_eq!(crop, Some((20, 40, 200, 100)));
 
-        let plain = monitor("B", (0, 0), (1920, 1080), 1.0);
-        let crop = plain.device_crop(rect(10.0, 20.0, 100.0, 50.0), (1920, 1080));
+        let crop = rect(10.0, 20.0, 100.0, 50.0).device_crop(1.0, (1920, 1080));
         assert_eq!(crop, Some((10, 20, 100, 50)));
+
+        // A fractional scale, as a 150 % desktop gives.
+        let crop = rect(10.0, 20.0, 100.0, 50.0).device_crop(1.5, (2880, 1620));
+        assert_eq!(crop, Some((15, 30, 150, 75)));
+    }
+
+    #[test]
+    fn a_fractional_crop_rounds_each_edge_not_the_size() {
+        // At 1.5x the edges land on 0.75 and 2.25 device px, which round to
+        // 1 and 2: one pixel. Rounding the origin and the 1.5 px size instead
+        // would give two, and neighbouring regions would overlap.
+        let crop = rect(0.5, 0.5, 1.0, 1.0).device_crop(1.5, (30, 30));
+        assert_eq!(crop, Some((1, 1, 1, 1)));
+    }
+
+    #[test]
+    fn an_unusable_scale_crops_nothing() {
+        let region = rect(10.0, 20.0, 100.0, 50.0);
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(region.device_crop(scale, (1920, 1080)), None, "{scale}");
+        }
     }
 
     #[test]
     fn a_crop_running_past_the_window_is_clamped() {
-        let plain = monitor("A", (0, 0), (1920, 1080), 1.0);
-        let crop = plain.device_crop(rect(1900.0, 1070.0, 200.0, 200.0), (1920, 1080));
+        let crop = rect(1900.0, 1070.0, 200.0, 200.0).device_crop(1.0, (1920, 1080));
         assert_eq!(crop, Some((1900, 1070, 20, 10)));
+
+        // Clamped in device px, not logical px.
+        let crop = rect(1900.0, 1070.0, 200.0, 200.0).device_crop(2.0, (3840, 2160));
+        assert_eq!(crop, Some((3800, 2140, 40, 20)));
+    }
+
+    #[test]
+    fn a_crop_starting_in_the_far_half_of_the_last_pixel_keeps_that_pixel() {
+        // 1919.6 rounds to 1920, the window's far edge: without the last
+        // pixel the crop would be empty.
+        let crop = rect(1919.6, 1079.6, 200.0, 200.0).device_crop(1.0, (1920, 1080));
+        assert_eq!(crop, Some((1919, 1079, 1, 1)));
+
+        // A start past the window is still outside it.
+        let crop = rect(1920.0, 10.0, 200.0, 50.0).device_crop(1.0, (1920, 1080));
+        assert_eq!(crop, None);
     }
 
     #[test]
     fn a_crop_starting_off_window_keeps_only_the_overlap() {
-        let plain = monitor("A", (0, 0), (1920, 1080), 1.0);
-        let crop = plain.device_crop(rect(-10.0, -5.0, 20.0, 20.0), (1920, 1080));
+        let crop = rect(-10.0, -5.0, 20.0, 20.0).device_crop(1.0, (1920, 1080));
         assert_eq!(crop, Some((0, 0, 10, 15)));
     }
 
     #[test]
     fn degenerate_and_offscreen_crops_are_rejected() {
-        let plain = monitor("A", (0, 0), (1920, 1080), 1.0);
         let window = (1920, 1080);
-        assert!(plain
-            .device_crop(rect(10.0, 10.0, 0.0, 50.0), window)
+        assert!(rect(10.0, 10.0, 0.0, 50.0)
+            .device_crop(1.0, window)
             .is_none());
-        assert!(plain
-            .device_crop(rect(5000.0, 10.0, 50.0, 50.0), window)
+        assert!(rect(5000.0, 10.0, 50.0, 50.0)
+            .device_crop(1.0, window)
             .is_none());
-        assert!(plain
-            .device_crop(rect(10.0, 5000.0, 50.0, 50.0), window)
+        assert!(rect(10.0, 5000.0, 50.0, 50.0)
+            .device_crop(1.0, window)
             .is_none());
-        assert!(plain
-            .device_crop(rect(-100.0, 10.0, 50.0, 50.0), window)
+        assert!(rect(-100.0, 10.0, 50.0, 50.0)
+            .device_crop(1.0, window)
             .is_none());
     }
 }

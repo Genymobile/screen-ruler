@@ -4,7 +4,7 @@ A smart, edge-detection-based screen ruler for Linux, Windows and macOS.
 
 Move your mouse cursor over any UI element and instantly read the **width** and **height** of the space between the nearest edges — buttons, panels, windows, icons — with no clicking or dragging required.
 
-> **The Rust rewrite is in preview.** v0.1 has every measurement tool in quick mode: measure, copy, quit. Session mode (persistent annotations, undo/redo, Markdown export) is ported but not released yet: it ships in v0.2, or [build from source](#build-from-source) to use it now. Composite image export is not ported yet. Until both ship, the [Python version](#python-version) remains the full-featured option.
+> **The Rust rewrite is in preview.** v0.1 has every measurement tool in quick mode: measure, copy, quit. Session mode (persistent annotations, undo/redo, Markdown and image export) is ported but not released yet: it ships in v0.2, or [build from source](#build-from-source) to use it now. Until it ships, the [Python version](#python-version) remains the full-featured option.
 
 ## How it works
 
@@ -24,7 +24,7 @@ Download the archive for your platform from the [releases page](https://github.c
 
 Each archive contains the `screen-ruler` binary and an install script that copies it to a directory of your choice and sets up a [global keyboard shortcut](#global-keyboard-shortcut). The binary also runs as is, without installing.
 
-On Linux the only runtime dependency is fontconfig, which every desktop distribution ships. For copies to stay in the clipboard, also install wl-clipboard (Wayland) or xclip or xsel (X11). Without one, a copy can be lost, as soon as it is made or when screen-ruler quits, unless the desktop runs a clipboard manager. screen-ruler then prints a warning to stderr.
+On Linux the only runtime dependency is fontconfig, which every desktop distribution ships. For copies to stay in the clipboard, also install wl-clipboard (Wayland) or xclip or xsel (X11). Without one, a copy can be lost, as soon as it is made or when screen-ruler quits, unless the desktop runs a clipboard manager. screen-ruler then prints a warning to stderr. xsel cannot copy images, so image copies on X11 need xclip.
 
 ## Build from source
 
@@ -85,7 +85,8 @@ Measurements stay on screen as annotations instead of being copied one at a time
 |---|---|
 | Left click | Place the current measurement (point distance: place A, then B) |
 | Drag | Place a rectangle (modes 2 and 4) |
-| `Ctrl+C`, or the `MD` button | Copy all annotations as a Markdown list |
+| `Ctrl+C`, or the `MD` button | Copy all annotations as a Markdown list, then quit |
+| `Ctrl+Shift+C`, or the `IMG` button | Drag a region, or click a screen, to copy it as an image with its annotations, then quit. `Esc` cancels. Needs at least one annotation |
 | `Ctrl+Z` or `Z` | Undo the last annotation |
 | `Ctrl+Shift+Z` | Redo |
 | `Tab`, `Esc` or `SESSION` | Leave session mode; with annotations placed, hold for a second to discard them |
@@ -93,6 +94,8 @@ Measurements stay on screen as annotations instead of being copied one at a time
 | Closing the window (e.g. `Alt+F4`) | Quit; with annotations placed, hold `Alt+F4` where the system repeats it (e.g. Windows), else hold `Q` |
 
 While you hold one of these, a bar in the prompt fills. Let go before it is full and the annotations stay.
+
+The image is the screenshot taken at launch, with the placed annotations drawn on it. It has the screen's own pixels: a region 100 px wide on a 2x screen gives an image 200 px wide. A region can span screens: each screen gives its own part, and the gaps between screens that don't touch are transparent. At mixed scales on Wayland and macOS, the image takes the highest scale among the screens it covers, and the parts from lower-scale screens are enlarged to match. On X11 and Windows, the screens are laid out in physical pixels, so each screen's part keeps its own pixels and none is enlarged.
 
 When the annotations span several monitors, each Markdown line names its monitor (`on monitor 2`). Monitors are numbered from 1 by their top edge, highest first, then left to right among those at the same height.
 
@@ -137,12 +140,12 @@ For manual setup on any platform, see [docs/manual-shortcut-setup.md](docs/manua
 
 ## Known limitations
 
-- No composite image export yet (planned for v0.2). Session mode is not in a release yet: [build from source](#build-from-source) to use it.
+- Session mode is not in a release yet: [build from source](#build-from-source) to use it.
 - Tested live on GNOME Wayland (mixed scales, several monitors) and Windows 11 (several monitors, one rotated). KDE, wlroots compositors (Sway, Hyprland), X11 and macOS haven't been tested yet.
 
 ## Python version
 
-The original implementation (`screen_ruler.py`, `ruler/`, `qml/`) uses PyQt6 and OpenCV. It is the full-featured option until v0.2, and will be retired once the Rust version has session mode and image export.
+The original implementation (`screen_ruler.py`, `ruler/`, `qml/`) uses PyQt6 and OpenCV. It is the full-featured option until v0.2, which retires it.
 
 | Package | Minimum version |
 |---|---|
@@ -155,7 +158,7 @@ pip install -r requirements.txt
 python screen_ruler.py [--threshold-low N] [--threshold-high N] [--debug-edge-overlay]
 ```
 
-It has the same modes and controls, including session mode, plus composite image export: in session mode, `Ctrl+Shift+C` or the `IMG` button, then drag a region to copy a screenshot of it with its annotations.
+It has the same modes and controls, including session mode and the image export. In session mode its copies keep the app open, and its image export takes a dragged region only.
 
 To build a standalone ~100 MB executable with [PyInstaller](https://pyinstaller.org) and install it with a keyboard shortcut:
 

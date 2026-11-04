@@ -67,6 +67,19 @@ pub fn is_wayland_session() -> bool {
     names_a_display(std::env::var_os("WAYLAND_DISPLAY").as_deref())
 }
 
+/// Whether the desktop's shared coordinate frame is in logical px.
+///
+/// Once a press drags the pointer out of its window, the window system keeps
+/// reporting it in that window's coordinates, and placing every window in one
+/// frame is what lets a region span screens. On Wayland and macOS that frame
+/// is the logical layout, so one of the system's logical px is one frame
+/// unit; on X11 and Windows it is physical px. A toolkit scale override
+/// (`SLINT_SCALE_FACTOR`) changes how many frame units a window's logical
+/// px is, which the caller accounts for.
+pub fn desktop_frame_is_logical() -> bool {
+    cfg!(target_os = "macos") || (cfg!(target_os = "linux") && is_wayland_session())
+}
+
 /// Whether a `*_DISPLAY` value names a display. Set-but-empty counts as
 /// unset, as it does for Wayland clients themselves: wrappers and service
 /// units often blank the variable rather than removing it.

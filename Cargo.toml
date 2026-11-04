@@ -21,3 +21,27 @@ strip = true
 # change drag in a debug build. Optimise the core even there.
 [profile.dev.package.ruler-core]
 opt-level = 3
+
+# An image copy's PNG encoding is slow unoptimised too. Only the encoding
+# gains: resampling is generic (`imageops::resize`), so it is compiled in
+# ruler-app, at ruler-app's opt-level.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.simd-adler32]
+opt-level = 3
