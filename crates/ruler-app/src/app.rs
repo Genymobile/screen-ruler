@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use image::RgbaImage;
 use ruler_core::analysis::Analysis;
+use ruler_core::capture;
 use ruler_core::clipboard::{self, Copied, Payload};
 use ruler_core::color::{KernelCache, Sample};
 use ruler_core::edges;
@@ -22,10 +23,11 @@ use ruler_core::state::{
     Control, Destructive, DragState, Mode, RulerState, HELP_FADE, MODE_COUNT,
 };
 use slint::platform::Key;
+use slint::winit_030::WinitWindowAccessor;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::analysis;
-use crate::export;
+use crate::export::{self, Placement};
 use crate::input::{self, Wheel};
 use crate::surface::{LogicalRays, Surface};
 use crate::{AnnotationMark, Dial, MarkKind, Overlay, Rays};
@@ -62,6 +64,9 @@ pub struct App {
     /// The selection as it was before the current press, restored if the
     /// press turns out to be a confirming click.
     previous_drag: Option<DragState>,
+    /// Where each window sits in the desktop's frame, by monitor, taken when
+    /// an export press starts: what lets the export region span screens.
+    export_layout: Vec<Option<Placement>>,
     wheel: Wheel,
     /// Sampling kernels, cached per radius.
     kernels: KernelCache,
@@ -106,6 +111,7 @@ impl App {
             hovered: None,
             press: None,
             previous_drag: None,
+            export_layout: Vec::new(),
             wheel: Wheel::default(),
             kernels: KernelCache::new(),
             thresholds,
@@ -165,7 +171,8 @@ impl App {
                 self.state.drag.end = (point.x, point.y);
             }
         }
-        // Unsnapped, and possibly outside the window: the crop clamps it.
+        // Unsnapped, and possibly outside the window, onto other screens:
+        // the window keeps getting the moves of a press made on it.
         if self.state.export_drag.active {
             self.state.export_drag.end = (x, y);
         }
@@ -229,8 +236,9 @@ impl App {
         self.dismiss_help();
         self.press = Some((monitor, x, y));
         if self.state.export_armed {
-            // The region is the screen's own pixels, so nothing snaps.
+            // The region is the screens' own pixels, so nothing snaps.
             self.state.export_drag = DragState::pressed(monitor, (x, y), (x, y));
+            self.export_layout = self.lay_out_export(monitor);
             self.render();
         } else if self.state.mode.is_rect_selection() {
             // Kept aside: if this press turns out to be a click, it confirms
@@ -295,11 +303,23 @@ impl App {
     /// Copies the export region as an image: the whole screen under a click,
     /// or the dragged region, unless it is under a pixel on a side, which
     /// counts as a click too.
+    ///
+    /// The drag ends on a screen. If the layout puts its end on none, the
+    /// layout is wrong: the region is then cut at the start screen's edge
+    /// rather than stitched from misplaced screens.
     fn finish_export(&mut self, click: bool) {
-        let Some(screen) = self.window_rect(self.state.export_drag.monitor) else {
+        let start = self.state.export_drag.monitor;
+        let Some(screen) = self.window_rect(start) else {
             self.state.cancel_export();
             return;
         };
+        if !export::lands_on_a_window(&self.export_layout, start, self.state.export_drag.end) {
+            eprintln!(
+                "screen-ruler: the drag ended off every screen the image export knows the place \
+                 of, so the image stops at the edge of the screen where the drag started"
+            );
+            self.export_layout = self.alone(&self.export_layout, start);
+        }
         if click {
             self.state.export_region(screen);
         } else {
@@ -713,26 +733,49 @@ impl App {
         }
     }
 
-    /// Snapshots the window `rect` is on, on the next turn of the event
-    /// loop, and copies `rect` out of it.
+    /// Snapshots every window `rect` covers, on the next turn of the event
+    /// loop, cuts each one's part of `rect` out of its snapshot, and copies
+    /// them stitched into one image. `rect` is on its monitor's window, in
+    /// its logical px, and runs onto the other screens the export layout
+    /// places.
     ///
     /// Deferred, because the snapshot renders the window, and rendering runs
     /// change handlers that call `with_app`: taken while the app is borrowed,
     /// as it is here, the snapshot would panic.
-    fn schedule_image_copy(&self, rect: Rect) {
-        let (Some(window), Some(surface)) = (
-            self.windows.get(rect.monitor),
-            self.surfaces.get(rect.monitor),
-        ) else {
+    fn schedule_image_copy(&mut self, rect: Rect) {
+        // `export::composite` then uses the start screen alone.
+        if export::leaves_out_overlapping_screens(rect, &self.export_layout) {
+            eprintln!(
+                "screen-ruler: two screens the image export places overlap, as mirrored \
+                 displays do, so the image stops at the edge of the screen where the drag \
+                 started"
+            );
+        }
+        let Some(composite) = export::composite(rect, &self.export_layout) else {
+            self.copy_image_and_quit(Err("the region is outside the window".to_string()));
             return;
         };
-        let window = window.as_weak();
-        let capture_size = surface.image.dimensions();
+        // Weak handles: a window gone by then has nothing left to copy.
+        let windows: Vec<_> = composite
+            .parts
+            .iter()
+            .map(|part| {
+                let window = self.windows[part.monitor].as_weak();
+                let capture_size = self.surfaces[part.monitor].image.dimensions();
+                (window, capture_size)
+            })
+            .collect();
         Timer::single_shot(Duration::ZERO, move || {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let image = snapshot_region(&window, rect, capture_size);
+            let images = composite
+                .parts
+                .iter()
+                .zip(&windows)
+                .map(|(part, (window, capture_size))| {
+                    let window = window.upgrade().ok_or("the window is gone")?;
+                    snapshot_region(&window, part.region, *capture_size)
+                })
+                .collect::<Result<Vec<_>, String>>();
+            let image = images.map(|images| export::stitch(&composite, &images));
             with_app(|app| app.copy_image_and_quit(image));
         });
     }
@@ -857,13 +900,14 @@ impl App {
         let pointer = self.state.pointer.filter(|p| p.monitor == monitor);
 
         // While armed, the export replaces the measurement: only its region
-        // shows, without a size, since the image is what gets copied.
+        // shows, on every screen it covers, without a size, since the image
+        // is what gets copied.
         if self.state.export_armed {
             live.rect = self
                 .state
                 .export_drag
                 .rect()
-                .filter(|r| r.monitor == monitor);
+                .and_then(|r| export::region_on(r, &self.export_layout, monitor));
             if monitor == self.state.active_monitor {
                 live.hint = Some(
                     "Drag a region or click a screen to copy it as an image, then quit · Esc to cancel",
@@ -1130,11 +1174,99 @@ impl App {
         let width = window.size().to_logical(window.scale_factor()).width;
         (width > 0.0).then_some(width)
     }
+
+    // ------------------------------------------------------ export layout
+
+    /// Where each window sits in the desktop's frame, for an export pressed
+    /// on `start`'s window, by monitor.
+    ///
+    /// A window winit cannot tell the monitor of is left out. If that is the
+    /// start window, it cannot be related to any other, so it stands alone:
+    /// the region is then cut at its edge.
+    fn lay_out_export(&mut self, start: usize) -> Vec<Option<Placement>> {
+        // The capture scale of a window the pointer has not been over yet
+        // is still the capture backend's guess.
+        for monitor in 0..self.windows.len() {
+            if let Some(width) = self.window_logical_width(monitor) {
+                self.surfaces[monitor].reconcile_scale(width);
+            }
+        }
+        let logical = capture::desktop_frame_is_logical();
+        let layout: Vec<_> = (0..self.windows.len())
+            .map(|monitor| self.frame_placement(monitor, logical))
+            .collect();
+        if layout.get(start).copied().flatten().is_some() {
+            layout
+        } else {
+            self.alone(&layout, start)
+        }
+    }
+
+    /// `layout` with only `start`'s window left in it, placed on its own if
+    /// it has no place: that cuts the region at the start screen's edge.
+    fn alone(&self, layout: &[Option<Placement>], start: usize) -> Vec<Option<Placement>> {
+        let placement = layout
+            .get(start)
+            .copied()
+            .flatten()
+            .or_else(|| self.standalone_placement(start));
+        (0..self.windows.len())
+            .map(|monitor| placement.filter(|_| monitor == start))
+            .collect()
+    }
+
+    /// Where `monitor`'s window sits in the desktop's frame, from the
+    /// monitor winit says it is on. `logical` is whether that frame is in
+    /// logical px ([`capture::desktop_frame_is_logical`]).
+    fn frame_placement(&self, monitor: usize, logical: bool) -> Option<Placement> {
+        let window = self.windows.get(monitor)?.window();
+        let (origin, system_scale) = window
+            .with_winit_window(|winit_window| {
+                let screen = winit_window.current_monitor()?;
+                let position = screen.position();
+                let (x, y) = (f64::from(position.x), f64::from(position.y));
+                let origin = if logical {
+                    // winit reports a logical layout scaled by the
+                    // monitor's own factor; dividing it back gives it.
+                    let factor = screen.scale_factor();
+                    (factor.is_finite() && factor > 0.0)
+                        .then(|| ((x / factor) as f32, (y / factor) as f32))?
+                } else {
+                    (x as f32, y as f32)
+                };
+                // The window system's scale, which `SLINT_SCALE_FACTOR`
+                // leaves as it is while it overrides the window's.
+                Some((origin, winit_window.scale_factor() as f32))
+            })
+            .flatten()?;
+        let units = export::frame_units(logical, window.scale_factor(), system_scale);
+        self.placement_at(monitor, origin, units)
+    }
+
+    /// A place for `monitor`'s window with no relation to any other: at the
+    /// frame's origin, one unit per logical px.
+    fn standalone_placement(&self, monitor: usize) -> Option<Placement> {
+        self.placement_at(monitor, (0.0, 0.0), 1.0)
+    }
+
+    /// `monitor`'s window at `origin` in the frame, with `units` frame units
+    /// per logical px.
+    fn placement_at(&self, monitor: usize, origin: (f32, f32), units: f32) -> Option<Placement> {
+        let window = self.windows.get(monitor)?.window();
+        let size = window.size().to_logical(window.scale_factor());
+        let capture_scale = self.surfaces.get(monitor)?.geometry.sanitised_scale();
+        Some(Placement {
+            origin,
+            units,
+            density: capture_scale / units,
+            size: (size.width, size.height),
+        })
+    }
 }
 
 /// Snapshots `window` with only its screenshot and placed annotations drawn,
-/// and cuts `rect` out of it at the resolution of the screen's capture,
-/// `capture_size` device px.
+/// and cuts `rect`, its part of the export region, out of it at the
+/// resolution of the screen's capture, `capture_size` device px.
 ///
 /// Never called while the app is borrowed: see `App::schedule_image_copy`.
 fn snapshot_region(
