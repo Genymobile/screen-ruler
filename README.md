@@ -138,8 +138,7 @@ For manual setup on any platform, see [docs/manual-shortcut-setup.md](docs/manua
 ## Known limitations
 
 - No composite image export yet (planned for v0.2). Session mode is not in a release yet: [build from source](#build-from-source) to use it.
-- On wlroots compositors (Sway, Hyprland), rotated or flipped monitors are captured unrotated. GNOME and Windows handle rotation.
-- Tested live on GNOME Wayland (mixed scales, several monitors) and Windows 11 (several monitors, one rotated). KDE, X11 and macOS haven't been tested yet.
+- Tested live on GNOME Wayland (mixed scales, several monitors) and Windows 11 (several monitors, one rotated). KDE, wlroots compositors (Sway, Hyprland), X11 and macOS haven't been tested yet.
 
 ## Python version
 
