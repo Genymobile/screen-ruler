@@ -1,0 +1,14 @@
+name: Constitutional AI Review
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  talos:
+    uses: Genymobile/Talos/.github/workflows/talos-critic.yml@v1
+    with:
+      team: auto        # Reads the genyteam-desktop topic
+      blocking: false   # Advisory mode: annotate, never fail the build
