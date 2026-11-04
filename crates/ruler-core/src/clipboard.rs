@@ -127,9 +127,10 @@ mod linux {
         Ok(out)
     }
 
-    /// How long a helper gets to fork its daemon and exit. They normally take
-    /// a few milliseconds; one still running after this is assumed to be
-    /// serving the selection in the foreground.
+    /// How long a helper gets, from the last write that got through, to read
+    /// more or to fork its daemon and exit. They normally take a few
+    /// milliseconds; one still running this long after the whole payload is
+    /// assumed to be serving the selection in the foreground.
     const FORK_TIMEOUT: Duration = Duration::from_secs(2);
 
     /// One clipboard helper: the program to run and the arguments it needs.
@@ -181,8 +182,12 @@ mod linux {
         })
     }
 
-    /// Feeds `bytes` to a helper on stdin and waits for it to fork, all within
-    /// `timeout`.
+    /// Feeds `bytes` to a helper on stdin and waits for it to fork. The wait
+    /// ends when the helper exits, or once it has gone `timeout` without
+    /// reading more of the payload. A helper still running then has failed
+    /// if it has not read the whole payload. If it has, the copy succeeded:
+    /// the helper is serving the selection in the foreground, so it is left
+    /// running.
     ///
     /// Returns `None` when the program is not installed, and `Some(Err(..))`
     /// when it exists but failed, so a failure (no display, say) is reported
@@ -223,14 +228,20 @@ mod linux {
             return Some(Err(format!("{program}: {e}")));
         }
 
-        let deadline = Instant::now() + timeout;
+        // Pushed back by every write that makes progress, so a large payload
+        // has as long as it needs, and only a stall times out.
+        let mut deadline = Instant::now() + timeout;
         let mut remaining = bytes;
         let mut stdin = Some(stdin);
         let mut write_error = None;
         loop {
+            let mut progressed = false;
             if let Some(pipe) = stdin.as_mut() {
                 match pipe.write(remaining) {
-                    Ok(written) => remaining = &remaining[written..],
+                    Ok(written) => {
+                        remaining = &remaining[written..];
+                        progressed = written > 0;
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(e) => write_error = Some(e),
@@ -240,6 +251,9 @@ mod linux {
                 if remaining.is_empty() || write_error.is_some() {
                     stdin = None;
                 }
+            }
+            if progressed {
+                deadline = Instant::now() + timeout;
             }
 
             match child.try_wait() {
@@ -257,8 +271,12 @@ mod linux {
                         None => Ok(()),
                     });
                 }
+                // Straight back to writing while the helper keeps reading;
+                // a pause only while nothing moves.
                 Ok(None) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(2));
+                    if !progressed {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
                 }
                 // Still running with the whole payload delivered: it is
                 // serving the selection in the foreground.
@@ -429,6 +447,17 @@ mod tests {
         let script = format!("test \"$(wc -c)\" -eq {}", payload.len());
         assert_eq!(
             pipe_to("sh", &["-c", &script], &payload, SHORT),
+            Some(Ok(()))
+        );
+    }
+
+    #[test]
+    fn a_helper_that_reads_slowly_but_never_stalls_gets_the_whole_payload() {
+        // A 64 KiB block every 100 ms: never 200 ms without progress, ~600 ms in all.
+        let payload = vec![0u8; 6 * 65536];
+        let script = "for i in 1 2 3 4 5 6 7; do dd bs=65536 count=1 status=none of=/dev/null; sleep 0.1; done";
+        assert_eq!(
+            pipe_to("sh", &["-c", script], &payload, SHORT),
             Some(Ok(()))
         );
     }
