@@ -95,7 +95,7 @@ Measurements stay on screen as annotations instead of being copied one at a time
 
 While you hold one of these, a bar in the prompt fills. Let go before it is full and the annotations stay.
 
-The image is the screenshot taken at launch, with the placed annotations drawn on it. It has the screen's own pixels: a region 100 px wide on a 2x screen gives an image 200 px wide. A region ends at the edge of the screen where the drag started.
+The image is the screenshot taken at launch, with the placed annotations drawn on it. It has the screen's own pixels: a region 100 px wide on a 2x screen gives an image 200 px wide. A region can span screens: each screen gives its own part, and the gaps between screens that don't touch are transparent. At mixed scales on Wayland and macOS, the image takes the highest scale among the screens it covers, and the parts from lower-scale screens are enlarged to match. On X11 and Windows, the screens are laid out in physical pixels, so each screen's part keeps its own pixels and none is enlarged.
 
 When the annotations span several monitors, each Markdown line names its monitor (`on monitor 2`). Monitors are numbered from 1 by their top edge, highest first, then left to right among those at the same height.
 
